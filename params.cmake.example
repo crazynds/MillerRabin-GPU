@@ -1,0 +1,92 @@
+# params.cmake — Build configuration. Edit here, then run cmake.
+
+# ── Miller-Rabin GPU ──────────────────────────────────────────────────────────
+
+# Exponentiation window (range: 4–10)
+set(MR_WINDOW_BITS 8)
+
+# Candidates per GPU call. The larger this is, the more VRAM is used.
+set(MR_BATCH_SIZE 256)
+
+# Per-thread register limit for CUDA compilation (nvcc -maxrregcount).
+# 0 = no limit (let nvcc decide). Smaller values increase GPU occupancy at the
+# cost of possible spills to local memory.
+set(MR_MAXRREGCOUNT 0)
+
+# Threads per block for each kernel (must be a multiple of 32)
+set(MR_THR_LOAD        256)
+set(MR_THR_PMUL        256)
+set(MR_THR_REDUCE      256)
+set(MR_THR_SELECT_WIN  256)
+set(MR_THR_CHECK       256)
+set(MR_THR_COPY        128)
+set(MR_CARRY_INTER_THR  32)
+
+# Carry algorithm: CARRY_ALG_SEQUENTIAL | CARRY_ALG_SINGLE_TILE | CARRY_ALG_MULTI_TILE | CARRY_ALG_PREFIX_SCAN
+set(CARRY_NORM_ALG CARRY_ALG_SINGLE_TILE)
+
+# Carry tile size
+set(MR_CARRY_TILE 32)
+
+# Threads per block for CARRY_ALG_PREFIX_SCAN (multiple of 32, 32..1024).
+# 32 → scan via shuffle (1 warp); >32 → hierarchical block-wide scan.
+set(MR_PSCAN_TILE 32)
+
+# Tile used for subtraction
+set(MR_SUB_TILE 256)
+
+# Minimum interval between progress-bar updates (ms)
+set(MR_PROGRESS_INTERVAL_MS 2000)
+
+# Advanced monitor: prints carry iteration statistics (adds overhead).
+# ON | OFF
+set(MR_ADVANCED_MONITOR ON)
+
+# Limb base: each limb is a digit in base 2^LIMB_BITS.
+# Smaller (e.g. 8) → more limbs (slower) but much more precision headroom for the
+# FFT backends (double) and coefficient headroom for NTT. Larger (e.g. 20) → fewer
+# limbs (faster) but overflows precision sooner. Runtime guards (multiplication
+# backend constructors) validate whether the value is safe for the size + algorithm.
+# Sane range: 4 to 30.
+set(LIMB_BITS 16)
+
+# Big-integer multiplication algorithm (compile-time). SINGLE parameter: defines
+# both the product AND which backend the Multiplier class resolves (see
+# ops/mul/multiplier.cuh).
+#
+# Limit in DECIMAL DIGITS (D). min = 1 (over-padding). Runtime guards abort if it
+# is exceeded. b = LIMB_BITS. Schoolbook is unlimited (only bounded by O(n²) perf).
+#
+# Maximum D formulas, all in DIGITS:
+#   exact (NTT) — linear in b:
+#     MUL_MERGE_GPUNTT : D ≤ 4.0e7 · b           (logn ≤ 28)
+#     MUL_4STEP_GPUNTT : D ≤ 2.5e6 · b           (logn ≤ 24)
+#   approximate (FFT, 52-bit double mantissa) — largest D satisfying:
+#     (3.32·D/b) · log2(6.64·D/b) < 2^(50−2b)
+#     (cuFFT only that; GPUFFT/FFNT also have logn ≤ 24 ⇒ extra cap D ≤ 2.5e6·b)
+#
+#   D_max (digits):                 b=16     b=12     b=8
+#   MUL_SCHOOLBOOK                  ∞        ∞        ∞
+#   MUL_MERGE_GPUNTT                ~6.5e8   ~4.8e8   ~3.2e8
+#   MUL_4STEP_GPUNTT                ~4.0e7   ~3.0e7   ~2.0e7
+#   MUL_FFT_CUFFT                   ~7.9e4   ~1.0e7   ~1.3e9
+#   MUL_FFT_GPUFFT                  ~7.9e4   ~1.0e7   ~2.0e7   (cap logn≤24)
+#   MUL_FFNT_GPUFFT                 ~7.9e4   ~1.0e7   ~2.0e7   (cap logn≤24)
+set(MUL_ALG MUL_MERGE_GPUNTT)
+
+# Modular reduction algorithm used in modmul/modsq:
+#   MOD_RED_MONTGOMERY       — REDC (Montgomery working form). Default.
+#   MOD_RED_BARRETT          — Barrett reduction (working form = plain residue).
+set(MOD_REDUCTION_ALG MOD_RED_BARRETT)
+
+# ── GPU-NTT (Alisah-Ozcan/GPU-NTT library) ────────────────────────────────────
+
+# Enable kernel tables optimized for the RTX 4090 (Compute Capability 8.9).
+# ON  → use CC_89 configs for n_power 27 and 28 (shared_mem 1024×T, larger grids)
+# OFF → use generic configs for those ranges
+set(GPUNTT_CC89 OFF)
+
+# NTT layout in the batch:
+#   PerPolynomial  — NTT per row (per candidate). Recommended default.
+#   PerCoefficient — NTT per column (per coefficient index across candidates).
+set(GPUNTT_NTT_LAYOUT PerPolynomial)

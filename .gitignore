@@ -1,0 +1,11 @@
+.claude/
+build/
+params.cmake
+
+# CMake-generated configuration header (created from src/config.h.in)
+src/config.h
+
+# Object files / OS junk
+*.o
+*.obj
+.DS_Store
