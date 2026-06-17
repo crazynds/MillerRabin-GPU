@@ -4,8 +4,6 @@ The big-integer multiplication backend is selected at **compile time** via the
 `MUL_ALG` parameter in `params.cmake`. All backends expose the same `Multiplier`
 interface (see `src/ops/mul/multiplier.cuh`).
 
----
-
 ## Overview
 
 | Backend            | Complexity | Max digits (b=16) | External dep         |
@@ -27,8 +25,6 @@ operating range, not a silent precision loss boundary.
 > dramatically extends the FFT backends' safe range — see
 > [configuration.md](configuration.md) for the full table.
 
----
-
 ## Schoolbook — `MUL_SCHOOLBOOK`
 
 Direct O(n²) convolution: each output coefficient is the dot product of two
@@ -40,8 +36,6 @@ coefficient vectors, computed by one GPU thread.
   b=16). Use as a debugging baseline or for quick correctness checks.
 - The modular reduction still uses the NTT "merge" backend internally even when
   the product itself uses schoolbook.
-
----
 
 ## Complex FFT backends
 
@@ -92,8 +86,6 @@ replaces a cyclic FFT of length n, roughly halving the transform work.
 - Same precision and length constraints as `MUL_FFT_GPUFFT`.
 - Requires CMake ≥ 3.26.
 
----
-
 ## Integer FFT backends — NTT
 
 An **NTT (Number Theoretic Transform)** is an FFT evaluated over a finite
@@ -123,4 +115,3 @@ Decomposes a large transform into smaller sub-transforms with transpositions
   digits at b=16.
 - More complex kernel scheduling; uses two GPU transpose passes.
 
----

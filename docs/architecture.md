@@ -3,8 +3,6 @@
 This document explains how the GPU pipeline works internally — from reading a
 candidate equation to producing a primality verdict.
 
----
-
 ## High-level flow
 
 ```
@@ -33,8 +31,6 @@ test_batch()            ← bench_mr_gpu.cu
           returns bool[] (passed/failed) per candidate
 ```
 
----
-
 ## Number representation
 
 Every big integer is stored as an array of `n_limbs` unsigned 64-bit values,
@@ -53,8 +49,6 @@ buf[i * n_limbs + j]  =  limb j of candidate i
 ```
 
 This layout lets a single GPU kernel processcandidates simultaneously by batch.
-
----
 
 ## Modular arithmetic context (`BatchModCtx`)
 
@@ -81,8 +75,6 @@ single multiplication).
 
 Pre-computed per batch:
 - `μ_i = floor(b^{2k} / N_i)` for each candidate i, stored as a limb array
-
----
 
 ## Multiplication pipeline
 
@@ -135,8 +127,6 @@ see [configuration.md](configuration.md) for details.
 > The NTT case produces exact integer coefficients; the FFT case produces
 > floating-point values that are rounded to the nearest integer first.
 
----
-
 ## Modular exponentiation
 
 `miller_rabin_runner.cu` implements **left-to-right windowed exponentiation**:
@@ -162,8 +152,6 @@ Many prime candidates of the form `10^a - … - 1` have `N ≡ 3 (mod 4)`, meani
 after the initial exponentiation — a separate optimized kernel
 `gpu_miller_rabin_s1` is dispatched.
 
----
-
 ## Batch testing and group short-circuiting
 
 The driver processes candidates in rounds:
@@ -188,8 +176,6 @@ semantically safe because `BatchModCtx` precomputes its tables per-candidate
 from each candidate's own `N` value, and the extra zero limbs do not change
 the number's value.
 
----
-
 ## Equation parsing and GMP construction
 
 `equation.h` implements a recursive-descent parser that evaluates an arithmetic
@@ -205,8 +191,6 @@ After evaluation, `NumberCandidate::build_from_mpz()`:
 
 The limb width `n_limbs` is chosen as `limbs_for_digits(max_digits + 4)` — a
 small padding that ensures FFT/NTT size constraints are never tight.
-
----
 
 ## Performance profiling
 

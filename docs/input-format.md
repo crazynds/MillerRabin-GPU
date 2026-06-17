@@ -3,8 +3,6 @@
 The driver reads a plain text file where each non-blank, non-comment line
 describes one integer candidate to test for primality.
 
----
-
 ## Line syntax
 
 ```
@@ -17,8 +15,6 @@ describes one integer candidate to test for primality.
 | `equation` | Yes      | An arithmetic expression that evaluates to the candidate integer.                              |
 
 Lines that start with `#` and blank lines are ignored.
-
----
 
 ## Equation grammar
 
@@ -65,8 +61,6 @@ NUMBER  = one or more decimal digits   # arbitrarily large
 # Factorial-like construction
 2^8192 - 2^4096 + 2^2048 - 1
 ```
-
----
 
 ## Groups
 
@@ -115,8 +109,6 @@ for each round, and groups that fail early never occupy slots in later rounds.
 A line without a `:` is treated as a standalone group with one equation. It
 participates in round 1 only and is reported as a winner if it passes.
 
----
-
 ## Large number literals
 
 You can place an arbitrarily large decimal number directly on a line:
@@ -132,8 +124,6 @@ size is limited only by available RAM.
 
 The same applies to sub-expressions: `(10^50000 - 1) / 7` first computes
 `10^50000 - 1` as a ~50 000-digit GMP integer, then divides — all exact.
-
----
 
 ## File format notes
 

@@ -12,8 +12,6 @@
 
 </div>
 
----
-
 Tests thousands-of-digit prime candidates in large GPU batches using FFT-based
 big-integer arithmetic with Montgomery or Barrett modular reduction. Candidates
 are expressed as arbitrary arithmetic equations — no fixed number format required.
@@ -23,8 +21,6 @@ are expressed as arbitrary arithmetic equations — no fixed number format requi
 1: 10^18001 - 52*10^16665 - 19*10^17750 - 1
 2: 2^74207281 - 1
 ```
-
----
 
 ## Quick start
 
@@ -49,8 +45,6 @@ cmake --build build -j
 > The [GPU-NTT](https://github.com/Alisah-Ozcan/GPU-NTT) library is fetched automatically by CMake.  
 > → Full guide: [docs/building.md](docs/building.md)
 
----
-
 ## How it works
 
 For each candidate `N`, the test decomposes `N − 1 = 2ˢ · d` and runs standard
@@ -63,8 +57,6 @@ decimal digits. All parameters — batch size, multiplication algorithm, reducti
 method, kernel thread counts — are tuned via a single [`params.cmake`](params.cmake.example) file.
 
 → Deep dive: [docs/architecture.md](docs/architecture.md) · [docs/backends.md](docs/backends.md)
-
----
 
 ## Input format
 
@@ -93,8 +85,6 @@ Each line is one equation, with an optional **group ID** prefix:
 
 → Full grammar and group semantics: [docs/input-format.md](docs/input-format.md)
 
----
-
 ## Usage
 
 ```sh
@@ -109,8 +99,6 @@ Each line is one equation, with an optional **group ID** prefix:
 | `--config` | Print active build configuration and exit |
 | `--bench-ops` | Benchmark individual GPU primitives |
 | `--bench-ops-long` | Longer primitive benchmark |
-
----
 
 ## Project layout
 
@@ -130,8 +118,6 @@ Each line is one equation, with an optional **group ID** prefix:
     ├── ops/                  # mul / carry / shift / sub GPU kernels
     └── helpers/ perf/        # Timers, micro-benchmarks, profiling tree
 ```
-
----
 
 ## Documentation
 

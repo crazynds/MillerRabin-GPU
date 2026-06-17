@@ -1,7 +1,5 @@
 # Building MillerRabinGPU
 
----
-
 ## Requirements summary
 
 | Dependency | Minimum version | How to get it |
@@ -14,8 +12,6 @@
 | Git | any | Package manager (needed for FetchContent) |
 | GPU-NTT | auto | Fetched automatically by CMake |
 | GPU-FFT | auto | Fetched automatically by CMake (only if using a GPU-FFT backend) |
-
----
 
 ## System dependencies
 
@@ -47,8 +43,6 @@ sudo pacman -S cmake git gmp base-devel
 # GCC 11 is available in the AUR: gcc11
 ```
 
----
-
 ## CUDA Toolkit
 
 If not already installed, grab the installer for your OS and CUDA version from:
@@ -77,8 +71,6 @@ automatically:
 | 12.x | GCC 12 |
 | 12.4+ | GCC 13 |
 
----
-
 ## CMake
 
 Minimum required version is **3.18**. Check your version:
@@ -101,8 +93,6 @@ sudo apt update && sudo apt install cmake
 
 > If you plan to use the `MUL_FFT_GPUFFT` or `MUL_FFNT_GPUFFT` backends,
 > you need **CMake ≥ 3.26** (required by the GPU-FFT library).
-
----
 
 ## GMP (GNU Multiple Precision Arithmetic Library)
 
@@ -129,8 +119,6 @@ If GMP is installed in a non-standard location, point CMake to it:
 ```sh
 cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/gmp
 ```
-
----
 
 ## Automatically fetched libraries
 
@@ -164,8 +152,6 @@ Same offline override:
 ```sh
 cmake -S . -B build -DFETCHCONTENT_SOURCE_DIR_GPUFFT=/opt/gpufft
 ```
-
----
 
 ## Build steps
 
@@ -206,8 +192,6 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 
----
-
 ## Build options
 
 These can be passed on the `cmake` command line to override `params.cmake`
@@ -223,8 +207,6 @@ cmake -S . -B build -DMR_BATCH_SIZE=128
 # Release with debug symbols
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 ```
-
----
 
 ## GPU architecture
 
@@ -247,8 +229,6 @@ To build for multiple architectures at once (larger binary):
 cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES="80;86;89"
 ```
 
----
-
 ## Verifying the build
 
 ```sh
@@ -261,8 +241,6 @@ cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES="80;86;89"
 # Benchmark the GPU primitives
 ./build/bench_mr_gpu --bench-ops
 ```
-
----
 
 ## Troubleshooting
 

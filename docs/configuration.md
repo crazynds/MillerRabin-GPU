@@ -9,8 +9,6 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
----
-
 ## Algorithm parameters
 
 ### `MR_WINDOW_BITS` (default: `8`)
@@ -30,8 +28,6 @@ pre-computation cost and VRAM usage.
 
 Valid range: **4 – 10**.
 
----
-
 ### `MR_BATCH_SIZE` (default: `256`)
 
 Number of candidates processed in a single GPU launch.
@@ -43,8 +39,6 @@ but require more VRAM:
 - VRAM per batch ≈ `MR_BATCH_SIZE × n_limbs × 8 bytes × ~20 buffers`
 - For 18 000-digit numbers with `LIMB_BITS=16`: n_limbs ≈ 3 750 → ~20 GB for
   batch=256. Reduce if you get OOM errors.
-
----
 
 ### `LIMB_BITS` (default: `16`)
 
@@ -74,8 +68,6 @@ Valid range: **4 – 30**. A value outside this range is a compile-time `#error`
 > approximate (double-precision floating point) and abort at runtime if the
 > precision guard predicts a wrong result.
 
----
-
 ### `MUL_ALG` (default: `MUL_MERGE_GPUNTT`)
 
 Compile-time selection of the big-integer multiplication algorithm.
@@ -92,8 +84,6 @@ Changing this requires a full rebuild.
 
 See [docs/backends.md](backends.md) for a detailed comparison.
 
----
-
 ### `MOD_REDUCTION_ALG` (default: `MOD_RED_BARRETT`)
 
 Modular reduction algorithm used for every `modmul` and `modsq` operation.
@@ -106,8 +96,6 @@ Modular reduction algorithm used for every `modmul` and `modsq` operation.
 **Barrett** avoids the conversion overhead at the cost of a slightly wider NTT
 buffer (`n_limbs + 1` instead of `n_limbs`). Prefer Barrett unless you have a
 reason to use Montgomery.
-
----
 
 ## Carry normalization
 
@@ -138,8 +126,6 @@ larger values → hierarchical block-wide scan. Must be a multiple of 32.
 
 Threads per block for the inter-tile phase of `CARRY_ALG_MULTI_TILE`.
 
----
-
 ## Kernel thread counts
 
 These control the number of CUDA threads per block for specific kernels. All
@@ -155,16 +141,12 @@ helps without profiling; the defaults work well across most GPUs.
 | `MR_THR_CHECK` | `check_passed_kernel` / `check_equals_kernel` — MR result check | 256 |
 | `MR_THR_COPY` | `bar_copy_out` (Barrett) — copies final residue to output | 128 |
 
----
-
 ## Subtraction
 
 ### `MR_SUB_TILE` (default: `256`)
 
 Tile size for the conditional subtraction kernel (`cond_sub_batch`), which
 ensures the result of a reduction is less than N. Must be a multiple of 32.
-
----
 
 ## Monitoring
 
@@ -179,8 +161,6 @@ Only relevant when the `--progress` flag is passed.
 When `ON`, prints detailed carry-iteration statistics after each kernel batch.
 Useful for profiling carry normalization, but adds measurable overhead on large
 batches. Set to `OFF` for production runs.
-
----
 
 ## GPU-NTT library options
 
@@ -205,8 +185,6 @@ Controls how the batch of polynomials is laid out in the NTT buffers.
 |-------|--------|-------|
 | `PerPolynomial` | One polynomial (candidate) per row | **Recommended.** Better memory locality for most access patterns. |
 | `PerCoefficient` | One coefficient index per row (transposed) | May benefit specific hardware memory subsystems. |
-
----
 
 ## Compiler flags
 

@@ -3,8 +3,6 @@
 This guide is for developers who want to call MillerRabinGPU from their own
 C++/CUDA program instead of using the `bench_mr_gpu` binary.
 
----
-
 ## Overview of the public API
 
 The project exposes three layers of abstraction. Use the highest one that fits
@@ -19,8 +17,6 @@ your needs:
 All headers are under `src/`. There is no installed library target yet — the
 simplest approach is to add this repository as a CMake subdirectory or copy the
 `src/` tree into your project.
-
----
 
 ## Adding to your CMake project
 
@@ -59,8 +55,6 @@ target_link_libraries(my_app PRIVATE GPUNTT::ntt CUDA::cudart CUDA::cufft gmp)
 > **Important**: you must run CMake on MillerRabinGPU at least once so that
 > `src/config.h` is generated from `src/config.h.in`. The generated file is
 > needed by every other header.
-
----
 
 ## Layer 1 — High level: equation strings
 
@@ -111,8 +105,6 @@ for (size_t round = 0; round < g.cands.size(); round++) {
     printf("Round %zu passed (probable prime).\n", round);
 }
 ```
-
----
 
 ## Layer 2 — Mid level: mpz_t or limb arrays
 
@@ -196,8 +188,6 @@ for (int i = 0; i < n_batch; i++)
 > harmless for candidates with smaller s (they simply check an already-passed
 > condition).
 
----
-
 ## Layer 3 — Low level: raw modular arithmetic
 
 If you need to run custom modular computations on the GPU (e.g. a custom
@@ -257,8 +247,6 @@ The internal representation depends on `MOD_REDUCTION_ALG`:
   `to_residue_batch` and `from_residue_batch` are still the correct conversion
   functions regardless of backend.
 
----
-
 ## Custom witness sets
 
 Pass any `std::vector<uint32_t>` as the witness list instead of
@@ -275,8 +263,6 @@ auto results = gpu_miller_rabin(ctx, d_all, Nm1_all, s, n_batch,
 The default set (`DEFAULT_WITNESSES` in `miller_rabin_runner.cuh`) uses 16
 witnesses: `{2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53}`,
 which is more than enough for numbers of any practical size.
-
----
 
 ## Multi-GPU
 
@@ -303,8 +289,6 @@ for (int dev = 0; dev < n_devices; dev++) {
 }
 ```
 
----
-
 ## Error handling
 
 All errors from the GMP/parsing layer throw `std::runtime_error`. CUDA errors
@@ -322,8 +306,6 @@ try {
     fprintf(stderr, "Error: %s\n", e.what());
 }
 ```
-
----
 
 ## Full minimal example
 
