@@ -1,5 +1,6 @@
 .claude/
 build/
+overleaf/
 params.cmake
 
 # CMake-generated configuration header (created from src/config.h.in)

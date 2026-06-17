@@ -1,6 +1,6 @@
 // helpers/bench_ops.cu — Benchmark of Montgomery operations GPU vs GMP CPU.
 //
-// Measures ops/second for mont_mul, mont_sq and mod in batch, comparing with GMP.
+// Measures ops/second for mul+mod, sq+mod and mod in batch, comparing with GMP.
 // Table: rows = operation, columns = number size in bits.
 //
 // Enabled with the --bench-ops flag in bench_mr_gpu.
@@ -520,7 +520,7 @@ void run_bench_ops(bool long_run)
         "GPU mul         (ops/s)",
         "GPU sq          (ops/s)",
         "GPU mont_mul    (ops/s)",
-        "GPU mont_sq     (ops/s)",
+        "GPU sq+mod     (ops/s)",
         "GPU miller-rabin(ops/s)",
         "GMP mul         (ops/s)",
         "GMP sq          (ops/s)",
@@ -541,8 +541,8 @@ void run_bench_ops(bool long_run)
 
     BenchResult results[N_ROWS][N_SIZES] = {};
 
-    printf("=== Benchmark Montgomery GPU vs GMP  (batch=%d, %.0fs/test) ===\n"
-           "    GPU mul/sq: NTT+pmul+INTT without REDC  |  mont_mul/sq: with REDC\n"
+    printf("=== Benchmark MillerRabin-GPU vs GMP  (batch=%d, %.0fs/test) ===\n"
+           "    GPU mul/sq: NTT+pmul+INTT without REDC  |  mul+mod/sq: with REDC\n"
            "    GMP mul/sq: multiplication only          |  mul+mod/sq+mod: with reduction\n"
            "    MR: 1 witness {2}, N equiv 3 mod 4 (s=1)\n\n",
            N_BATCH, BENCH_SECS);
@@ -553,43 +553,53 @@ void run_bench_ops(bool long_run)
         bool last = (c == N_SIZES - 1);
         printf("── %d bits ──\n", bits);
 
-        printf("  GPU mul          ... "); fflush(stdout);
+        printf("  GPU mul          ... ");
+        fflush(stdout);
         results[0][c] = bench_gpu_mul_only(bits, last);
         printf("%s\n", fmt_time(results[0][c].elapsed_sec).c_str());
 
-        printf("  GPU sq           ... "); fflush(stdout);
+        printf("  GPU sq           ... ");
+        fflush(stdout);
         results[1][c] = bench_gpu_sq_only(bits, last);
         printf("%s\n", fmt_time(results[1][c].elapsed_sec).c_str());
 
-        printf("  GPU mont_mul     ... "); fflush(stdout);
+        printf("  GPU mul+mod     ... ");
+        fflush(stdout);
         results[2][c] = bench_gpu_mul(bits, last);
         printf("%s\n", fmt_time(results[2][c].elapsed_sec).c_str());
 
-        printf("  GPU mont_sq      ... "); fflush(stdout);
+        printf("  GPU sq+mod      ... ");
+        fflush(stdout);
         results[3][c] = bench_gpu_sq(bits, last);
         printf("%s\n", fmt_time(results[3][c].elapsed_sec).c_str());
 
-        printf("  GPU miller-rabin ... "); fflush(stdout);
+        printf("  GPU miller-rabin ... ");
+        fflush(stdout);
         results[4][c] = bench_gpu_mr(bits, last);
         printf("%s\n", fmt_time(results[4][c].elapsed_sec).c_str());
 
-        printf("  GMP mul          ... "); fflush(stdout);
+        printf("  GMP mul          ... ");
+        fflush(stdout);
         results[5][c] = bench_gmp_mul_only(bits, last);
         printf("%s\n", fmt_time(results[5][c].elapsed_sec).c_str());
 
-        printf("  GMP sq           ... "); fflush(stdout);
+        printf("  GMP sq           ... ");
+        fflush(stdout);
         results[6][c] = bench_gmp_sq_only(bits, last);
         printf("%s\n", fmt_time(results[6][c].elapsed_sec).c_str());
 
-        printf("  GMP mul+mod      ... "); fflush(stdout);
+        printf("  GMP mul+mod      ... ");
+        fflush(stdout);
         results[7][c] = bench_gmp_mul(bits, last);
         printf("%s\n", fmt_time(results[7][c].elapsed_sec).c_str());
 
-        printf("  GMP sq+mod       ... "); fflush(stdout);
+        printf("  GMP sq+mod       ... ");
+        fflush(stdout);
         results[8][c] = bench_gmp_sq(bits, last);
         printf("%s\n", fmt_time(results[8][c].elapsed_sec).c_str());
 
-        printf("  GMP miller-rabin ... "); fflush(stdout);
+        printf("  GMP miller-rabin ... ");
+        fflush(stdout);
         results[9][c] = bench_gmp_mr(bits, last);
         printf("%s\n\n", fmt_time(results[9][c].elapsed_sec).c_str());
     }

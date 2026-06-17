@@ -10,6 +10,7 @@
 #include <string>
 #include <cstring>
 #include <cstdlib>
+#include <ctime>
 #include "batch_mod_ctx.cuh"
 #include "miller_rabin_runner.cuh"
 
@@ -751,6 +752,53 @@ static void run_correctness_tests(BatchModCtx &mont,
     cudaFree(d_y);
     cudaFree(d_out);
     printf("\n=== End of tests ===\n\n");
+}
+
+// ── Standalone entry point (no input file needed) ────────────────────
+//
+// Builds a small BatchModCtx from a fixed set of known primes so that
+// run_correctness_tests can be called without any candidate file.
+
+static void run_correctness_tests()
+{
+    // Generate 4 random odd numbers of ~8000 decimal digits each.
+    // Odd ensures N-1 is even (required for Miller-Rabin decomposition).
+    constexpr int NB = 64;
+    constexpr int TARGET_DIGITS = 8000;
+    constexpr int TARGET_BITS = (int)(TARGET_DIGITS / 0.30103) + 1;
+
+    int n_limbs = limbs_for_digits(TARGET_DIGITS + 4);
+
+    gmp_randstate_t rng;
+    gmp_randinit_mt(rng);
+    // Seed from /dev/urandom so each run produces different numbers.
+    unsigned long seed = 0;
+    FILE *urandom = fopen("/dev/urandom", "rb");
+    if (urandom) {
+        if (fread(&seed, sizeof(seed), 1, urandom) != 1) seed = (unsigned long)time(nullptr);
+        fclose(urandom);
+    }
+    gmp_randseed_ui(rng, seed);
+
+    std::vector<NumberCandidate> cands(NB);
+    for (int i = 0; i < NB; i++) {
+        mpz_t N;
+        mpz_init(N);
+        mpz_urandomb(N, rng, TARGET_BITS);
+        mpz_setbit(N, TARGET_BITS - 1);
+        mpz_setbit(N, 0);
+        cands[i].build_from_mpz(N, n_limbs);
+        mpz_clear(N);
+    }
+    gmp_randclear(rng);
+
+    std::vector<NumberCandidate *> ptrs(NB);
+    for (int i = 0; i < NB; i++) ptrs[i] = &cands[i];
+
+    std::vector<uint64_t> N_all, Nm1_all, d_all;
+    pack_batch(ptrs, n_limbs, N_all, Nm1_all, d_all);
+    BatchModCtx ctx(N_all, n_limbs, NB);
+    run_correctness_tests(ctx, N_all);
 }
 
 // ── Tests known Mersenne primes ───────────────────────────────────────

@@ -48,23 +48,6 @@ static constexpr int BATCH_SIZE = MR_BATCH_SIZE;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // Packs flat arrays [bsz * n_limbs] from a list of NumberCandidate pointers.
-static void pack_batch(
-    const std::vector<NumberCandidate *> &cands,
-    int n_limbs,
-    std::vector<uint64_t> &N_out,
-    std::vector<uint64_t> &Nm1_out,
-    std::vector<uint64_t> &d_out)
-{
-    int bsz = (int)cands.size();
-    N_out.assign((size_t)bsz * n_limbs, 0);
-    Nm1_out.assign((size_t)bsz * n_limbs, 0);
-    d_out.assign((size_t)bsz * n_limbs, 0);
-    for (int i = 0; i < bsz; i++) {
-        std::copy(cands[i]->N_lims.begin(),   cands[i]->N_lims.end(),   N_out.begin()   + i * n_limbs);
-        std::copy(cands[i]->Nm1_lims.begin(), cands[i]->Nm1_lims.end(), Nm1_out.begin() + i * n_limbs);
-        std::copy(cands[i]->d_lims.begin(),   cands[i]->d_lims.end(),   d_out.begin()   + i * n_limbs);
-    }
-}
 
 // Tests a batch of NumberCandidates on the GPU with the chosen witnesses.
 // Picks the s=1 fast path when all candidates in the batch share s==1.
@@ -223,6 +206,14 @@ int main(int argc, char *argv[])
 
     if (run_bench || run_bench_long) {
         run_bench_ops(run_bench_long);
+        return 0;
+    }
+
+    if (run_tests && !input_file) {
+        run_correctness_tests();
+        run_known_prime_tests();
+        run_general_s_prime_tests();
+        run_s1_nextprime_tests();
         return 0;
     }
 

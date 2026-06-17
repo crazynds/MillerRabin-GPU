@@ -85,24 +85,43 @@ struct GroupCandidate {
     // All numbers are sized to the widest equation in the group.
     void build()
     {
-        std::vector<mpz_t> ns(equations.size());
+        size_t n = equations.size();
+        std::vector<__mpz_struct> ns(n);
         int max_digits = 0;
 
-        for (size_t i = 0; i < equations.size(); i++) {
-            mpz_init(ns[i]);
-            EquationParser::eval(equations[i], ns[i]);
-            if (mpz_sgn(ns[i]) <= 0)
+        for (size_t i = 0; i < n; i++) {
+            mpz_init(&ns[i]);
+            EquationParser::eval(equations[i], &ns[i]);
+            if (mpz_sgn(&ns[i]) <= 0)
                 throw std::runtime_error(
                     "equation \"" + equations[i] + "\" evaluated to a non-positive value");
-            int d = (int)mpz_sizeinbase(ns[i], 10);
+            int d = (int)mpz_sizeinbase(&ns[i], 10);
             if (d > max_digits) max_digits = d;
         }
 
         n_limbs = limbs_for_digits(max_digits + 4);
-        cands.resize(equations.size());
-        for (size_t i = 0; i < equations.size(); i++) {
-            cands[i].build_from_mpz(ns[i], n_limbs);
-            mpz_clear(ns[i]);
+        cands.resize(n);
+        for (size_t i = 0; i < n; i++) {
+            cands[i].build_from_mpz(&ns[i], n_limbs);
+            mpz_clear(&ns[i]);
         }
     }
 };
+
+inline void pack_batch(
+    const std::vector<NumberCandidate *> &cands,
+    int n_limbs,
+    std::vector<uint64_t> &N_out,
+    std::vector<uint64_t> &Nm1_out,
+    std::vector<uint64_t> &d_out)
+{
+    int bsz = (int)cands.size();
+    N_out.assign((size_t)bsz * n_limbs, 0);
+    Nm1_out.assign((size_t)bsz * n_limbs, 0);
+    d_out.assign((size_t)bsz * n_limbs, 0);
+    for (int i = 0; i < bsz; i++) {
+        std::copy(cands[i]->N_lims.begin(),   cands[i]->N_lims.end(),   N_out.begin()   + i * n_limbs);
+        std::copy(cands[i]->Nm1_lims.begin(), cands[i]->Nm1_lims.end(), Nm1_out.begin() + i * n_limbs);
+        std::copy(cands[i]->d_lims.begin(),   cands[i]->d_lims.end(),   d_out.begin()   + i * n_limbs);
+    }
+}
