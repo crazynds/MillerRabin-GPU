@@ -24,6 +24,8 @@
 //   --config          Print the active build configuration and exit.
 //   --bench-ops       Benchmark the individual GPU primitives.
 //   --bench-ops-long  Longer/more thorough primitive benchmark.
+//   --cpu             Use GMP mpz_probab_prime_p (CPU) instead of GPU; same group
+//                     semantics, one candidate at a time, no batching.
 
 #include <cstdio>
 #include <cstdlib>
@@ -131,6 +133,105 @@ static std::vector<GroupCandidate> parse_input(const char *path)
     return result;
 }
 
+// ── CPU Miller-Rabin (via GMP) ────────────────────────────────────────────────
+
+// Tests one equation string using GMP's mpz_probab_prime_p (Miller-Rabin).
+// Returns true if probably prime, false if definitely composite.
+static bool cpu_test_equation(const std::string &equation, int rounds)
+{
+    mpz_t N;
+    mpz_init(N);
+    EquationParser::eval(equation, N);
+    int result = mpz_probab_prime_p(N, rounds);
+    mpz_clear(N);
+    return result > 0;
+}
+
+// Runs the round-based group testing on CPU (one candidate at a time, no batch).
+static void run_cpu_mode(
+    std::vector<GroupCandidate> &groups,
+    bool show_report)
+{
+    int n_groups   = (int)groups.size();
+    int max_rounds = 0;
+    for (auto &g : groups)
+        if ((int)g.equations.size() > max_rounds)
+            max_rounds = (int)g.equations.size();
+
+    int rounds = (int)DEFAULT_WITNESSES.size(); // use same witness count as GPU path
+
+    {
+        int total_eqs = 0;
+        for (auto &g : groups) total_eqs += (int)g.equations.size();
+        printf("Groups: %d  total equations: %d  max rounds: %d\n",
+               n_groups, total_eqs, max_rounds);
+        printf("CPU mode — GMP mpz_probab_prime_p  witnesses/rounds: %d\n\n", rounds);
+    }
+
+    auto t_global = hrc::now();
+    std::vector<bool> alive(n_groups, true);
+
+    for (int round = 0; round < max_rounds; round++) {
+        std::vector<int> active;
+        for (int gi = 0; gi < n_groups; gi++)
+            if (alive[gi] && round < (int)groups[gi].equations.size())
+                active.push_back(gi);
+
+        if (active.empty()) break;
+
+        printf("\n=== Round %d (%d groups active) ===\n", round + 1, (int)active.size());
+        fflush(stdout);
+        auto t_round = hrc::now();
+        int survivors_this_round = 0;
+
+        for (int gi : active) {
+            const std::string &eq = groups[gi].equations[round];
+            bool probably_prime = cpu_test_equation(eq, rounds);
+
+            if (show_report) {
+                printf("  [%s] %s  →  %s\n",
+                       groups[gi].label.c_str(), eq.c_str(),
+                       probably_prime ? "PROBABLY PRIME" : "composite");
+            }
+
+            if (!probably_prime) {
+                alive[gi] = false;
+            } else {
+                survivors_this_round++;
+            }
+        }
+
+        double t_r = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         hrc::now() - t_round).count() / 1000.0;
+        int eliminated = (int)active.size() - survivors_this_round;
+        printf("Round %d: %.2fs  —  %d survived, %d eliminated\n",
+               round + 1, t_r, survivors_this_round, eliminated);
+    }
+
+    double total_s = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       hrc::now() - t_global).count() / 1000.0;
+
+    printf("\n=== Results ===\n");
+    int n_winners = 0;
+    for (int gi = 0; gi < n_groups; gi++) {
+        if (alive[gi]) {
+            n_winners++;
+            auto &g = groups[gi];
+            if (g.label.empty() || g.label.rfind("__auto_", 0) == 0) {
+                printf("  PRIME: %s\n", g.equations[0].c_str());
+            } else {
+                printf("  PRIME group [%s]:\n", g.label.c_str());
+                for (auto &eq : g.equations)
+                    printf("    %s\n", eq.c_str());
+            }
+        }
+    }
+    if (n_winners == 0)
+        printf("  No group passed all rounds.\n");
+
+    printf("Total time: %.2fs\n", total_s);
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 int main(int argc, char *argv[])
@@ -141,6 +242,7 @@ int main(int argc, char *argv[])
     bool run_bench      = false;
     bool run_bench_long = false;
     bool show_config    = false;
+    bool cpu_mode       = false;
     const char *input_file = nullptr;
 
     for (int i = 1; i < argc; i++) {
@@ -151,6 +253,7 @@ int main(int argc, char *argv[])
         else if (a == "--bench-ops")      run_bench      = true;
         else if (a == "--bench-ops-long") run_bench_long = true;
         else if (a == "--config")         show_config    = true;
+        else if (a == "--cpu")            cpu_mode       = true;
         else if (!input_file)             input_file     = argv[i];
     }
 
@@ -220,7 +323,7 @@ int main(int argc, char *argv[])
     if (!input_file) {
         fprintf(stderr,
             "Usage: %s [--test] [--report] [--progress] [--config]"
-            " [--bench-ops] [--bench-ops-long] <input.txt>\n", argv[0]);
+            " [--bench-ops] [--bench-ops-long] [--cpu] <input.txt>\n", argv[0]);
         return 1;
     }
 
@@ -235,6 +338,12 @@ int main(int argc, char *argv[])
     if (groups.empty()) {
         fprintf(stderr, "No candidates found in %s\n", input_file);
         return 1;
+    }
+
+    // ── CPU mode: GMP Miller-Rabin, no GPU, no batching ──────────────────────
+    if (cpu_mode) {
+        run_cpu_mode(groups, show_report);
+        return 0;
     }
 
     int n_groups = (int)groups.size();
