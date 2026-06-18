@@ -324,7 +324,7 @@ __global__ static void vadd_carry_sequential(
 
 static constexpr int PSCAN_TILE = MR_CARRY_TILE;
 static_assert(PSCAN_TILE >= 32 && PSCAN_TILE <= 1024 && (PSCAN_TILE % 32) == 0,
-              "MR_PSCAN_TILE must be a multiple of 32 between 32 and 1024");
+              "MR_CARRY_TILE must be a multiple of 32 between 32 and 1024");
 
 static constexpr unsigned FULL_MASK = 0xFFFFFFFFu;
 

@@ -28,10 +28,6 @@ set(CARRY_NORM_ALG CARRY_ALG_SINGLE_TILE)
 # Carry tile size
 set(MR_CARRY_TILE 32)
 
-# Threads per block for CARRY_ALG_PREFIX_SCAN (multiple of 32, 32..1024).
-# 32 → scan via shuffle (1 warp); >32 → hierarchical block-wide scan.
-set(MR_PSCAN_TILE 32)
-
 # Tile used for subtraction
 set(MR_SUB_TILE 256)
 
