@@ -146,6 +146,7 @@ target_link_libraries(bench_mr_gpu PRIVATE
     CUDA::cudart
     CUDA::cufft
     ${GMP_LIB}
+    stdc++
 )
 if(MR_USE_GPUFFT)
     target_link_libraries(bench_mr_gpu PRIVATE GPUFFT::fft)
