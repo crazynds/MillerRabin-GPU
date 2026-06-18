@@ -24,10 +24,10 @@ using dsec = std::chrono::duration<double>;
 
 // ── Parameters ────────────────────────────────────────────────────────────────
 
-static constexpr double BENCH_SECS = 3.0;
+static constexpr double BENCH_SECS = 4.0;
 static constexpr int N_BATCH = MR_BATCH_SIZE;
-static constexpr int BIT_SIZES_SHORT[] = {128, 1024, 4096, 16384, 65536};
-static constexpr int BIT_SIZES_LONG[] = {128, 1024, 4096, 16384, 65536, 131072, 262144};
+static constexpr int BIT_SIZES_SHORT[] = {512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
+static constexpr int BIT_SIZES_LONG[] = {512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -48,20 +48,25 @@ struct BenchResult
     bool skipped = false;
 };
 
-// Formats ops/sec in a readable way (k, M, G)
-static std::string fmt_ops(double ops)
+// Formats ops/day (ops_per_sec * 86400) with appropriate units (T/G/M/k).
+static std::string fmt_ops_per_day(double ops_per_sec)
 {
-    if (ops < 0)
+    if (ops_per_sec < 0)
         return "  ERROR ";
+    double per_day = ops_per_sec * 86400.0;
     char buf[32];
-    if (ops >= 1e9)
-        snprintf(buf, sizeof(buf), "%7.2f G", ops / 1e9);
-    else if (ops >= 1e6)
-        snprintf(buf, sizeof(buf), "%7.2f M", ops / 1e6);
-    else if (ops >= 1e3)
-        snprintf(buf, sizeof(buf), "%7.2f k", ops / 1e3);
+    if (per_day >= 1e12)
+        snprintf(buf, sizeof(buf), "%7.2f T", per_day / 1e12);
+    else if (per_day >= 1e9)
+        snprintf(buf, sizeof(buf), "%7.2f G", per_day / 1e9);
+    else if (per_day >= 1e6)
+        snprintf(buf, sizeof(buf), "%7.2f M", per_day / 1e6);
+    else if (per_day >= 1e3)
+        snprintf(buf, sizeof(buf), "%7.2f k", per_day / 1e3);
+    else if (per_day >= 1.0)
+        snprintf(buf, sizeof(buf), "%7.2f  ", per_day);
     else
-        snprintf(buf, sizeof(buf), "%7.2f  ", ops);
+        snprintf(buf, sizeof(buf), "%7.4f  ", per_day);
     return buf;
 }
 
@@ -517,16 +522,16 @@ void run_bench_ops(bool long_run)
     gmp_randseed_ui(rng_state, 0xDEADBEEF);
 
     const char *row_names[] = {
-        "GPU mul         (ops/s)",
-        "GPU sq          (ops/s)",
-        "GPU mont_mul    (ops/s)",
-        "GPU sq+mod     (ops/s)",
-        "GPU miller-rabin(ops/s)",
-        "GMP mul         (ops/s)",
-        "GMP sq          (ops/s)",
-        "GMP mul+mod     (ops/s)",
-        "GMP sq+mod      (ops/s)",
-        "GMP miller-rabin(ops/s)",
+        "GPU mul         (ops/d)",
+        "GPU sq          (ops/d)",
+        "GPU mont_mul    (ops/d)",
+        "GPU sq+mod      (ops/d)",
+        "GPU miller-rabin(ops/d)",
+        "GMP mul         (ops/d)",
+        "GMP sq          (ops/d)",
+        "GMP mul+mod     (ops/d)",
+        "GMP sq+mod      (ops/d)",
+        "GMP miller-rabin(ops/d)",
     };
     const int N_ROWS = 10;
 
@@ -609,7 +614,7 @@ void run_bench_ops(bool long_run)
     const int ROW_W = 28;
 
     printf("\n");
-    printf("%-*s", ROW_W, "Operation");
+    printf("%-*s", ROW_W, "Operation (ops/day)");
     for (int c = 0; c < N_SIZES; c++)
         printf("  %*d-bit", COL_W - 5, BIT_SIZES[c]);
     printf("\n%s\n", std::string(ROW_W + N_SIZES * COL_W, '-').c_str());
@@ -621,11 +626,11 @@ void run_bench_ops(bool long_run)
         {
             const auto &res = results[r][c];
             printf("  %*s", COL_W - 2,
-                   res.skipped ? "N/A" : fmt_ops(res.ops_per_sec).c_str());
+                   res.skipped ? "N/A" : fmt_ops_per_day(res.ops_per_sec).c_str());
         }
         printf("\n");
         if (r == 4)
-            printf("\n"); // separator between GPU and GMP
+            printf("\n");
     }
 
     printf("%s\n", std::string(ROW_W + N_SIZES * COL_W, '-').c_str());
@@ -649,6 +654,7 @@ void run_bench_ops(bool long_run)
         }
         printf("\n");
     }
+
     printf("\n");
 
     gmp_randclear(rng_state);

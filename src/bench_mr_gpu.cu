@@ -135,16 +135,19 @@ static std::vector<GroupCandidate> parse_input(const char *path)
 
 // ── CPU Miller-Rabin (via GMP) ────────────────────────────────────────────────
 
-// Tests one equation string using GMP's mpz_probab_prime_p (Miller-Rabin).
-// Returns true if probably prime, false if definitely composite.
-static bool cpu_test_equation(const std::string &equation, int rounds)
+// Evaluates the equation and runs Miller-Rabin on CPU via GMP.
+// Returns {is_prime, elapsed_ms}.
+static std::pair<bool, double> cpu_test_equation(const std::string &equation)
 {
     mpz_t N;
     mpz_init(N);
     EquationParser::eval(equation, N);
-    int result = mpz_probab_prime_p(N, rounds);
+    auto t0 = hrc::now();
+    bool result = mpz_probab_prime_p(N, (int)DEFAULT_WITNESSES.size()) > 0;
+    double ms = std::chrono::duration_cast<std::chrono::microseconds>(
+                    hrc::now() - t0).count() / 1000.0;
     mpz_clear(N);
-    return result > 0;
+    return {result, ms};
 }
 
 // Runs the round-based group testing on CPU (one candidate at a time, no batch).
@@ -158,14 +161,13 @@ static void run_cpu_mode(
         if ((int)g.equations.size() > max_rounds)
             max_rounds = (int)g.equations.size();
 
-    int rounds = (int)DEFAULT_WITNESSES.size(); // use same witness count as GPU path
-
     {
         int total_eqs = 0;
         for (auto &g : groups) total_eqs += (int)g.equations.size();
         printf("Groups: %d  total equations: %d  max rounds: %d\n",
                n_groups, total_eqs, max_rounds);
-        printf("CPU mode — GMP mpz_probab_prime_p  witnesses/rounds: %d\n\n", rounds);
+        printf("CPU mode — Miller-Rabin (GMP)  witnesses: %d\n\n",
+               (int)DEFAULT_WITNESSES.size());
     }
 
     auto t_global = hrc::now();
@@ -184,28 +186,39 @@ static void run_cpu_mode(
         auto t_round = hrc::now();
         int survivors_this_round = 0;
 
+        double t_min = 1e18, t_max = 0.0, t_sum = 0.0;
+        int n_tested = 0;
+
         for (int gi : active) {
             const std::string &eq = groups[gi].equations[round];
-            bool probably_prime = cpu_test_equation(eq, rounds);
+            auto [probably_prime, ms] = cpu_test_equation(eq);
+
+            t_sum += ms;
+            if (ms < t_min) t_min = ms;
+            if (ms > t_max) t_max = ms;
+            n_tested++;
 
             if (show_report) {
-                printf("  [%s] %s  →  %s\n",
-                       groups[gi].label.c_str(), eq.c_str(),
-                       probably_prime ? "PROBABLY PRIME" : "composite");
+                printf("  [%s] %7.1f ms  %s  %s\n",
+                       groups[gi].label.c_str(), ms,
+                       probably_prime ? "PROBABLY PRIME" : "composite     ",
+                       eq.c_str());
             }
 
-            if (!probably_prime) {
+            if (!probably_prime)
                 alive[gi] = false;
-            } else {
+            else
                 survivors_this_round++;
-            }
         }
 
         double t_r = std::chrono::duration_cast<std::chrono::milliseconds>(
                          hrc::now() - t_round).count() / 1000.0;
         int eliminated = (int)active.size() - survivors_this_round;
-        printf("Round %d: %.2fs  —  %d survived, %d eliminated\n",
-               round + 1, t_r, survivors_this_round, eliminated);
+        double t_avg = n_tested > 0 ? t_sum / n_tested : 0.0;
+        printf("Round %d: %.2fs  —  %d survived, %d eliminated"
+               "  |  min %.1fms  avg %.1fms  max %.1fms\n",
+               round + 1, t_r, survivors_this_round, eliminated,
+               t_min, t_avg, t_max);
     }
 
     double total_s = std::chrono::duration_cast<std::chrono::milliseconds>(

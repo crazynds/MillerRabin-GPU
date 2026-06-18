@@ -49,11 +49,12 @@ __global__ static void vadd_from_raw_batch(
 static constexpr int CARRY_TILE = MR_CARRY_TILE;
 
 // ── CARRY_ALG_SINGLE_TILE ────────────────────────────────────────────────────
-// CARRY_TILE must be exactly 32 (one warp) to use __ballot_sync /
-// __shfl_up_sync and eliminate has_carry from shared memory.
+// 1 block per candidate, CARRY_TILE threads. Uses shared memory for carry
+// propagation — works for any CARRY_TILE (not limited to one warp).
 #if CARRY_NORM_ALG == CARRY_ALG_SINGLE_TILE
 
-static_assert(CARRY_TILE == 32, "CARRY_ALG_SINGLE_TILE requires CARRY_TILE == 32 (one warp)");
+static_assert(CARRY_TILE >= 32 && (CARRY_TILE % 32) == 0,
+              "CARRY_ALG_SINGLE_TILE requires CARRY_TILE to be a multiple of 32");
 
 #ifdef MR_ADVANCED_MONITOR
 __device__ unsigned long long g_for_count = 0;
@@ -77,6 +78,8 @@ __global__ static void carry_16bits(
     unsigned long long local_for = 0, local_dowhile = 0;
 #endif
 
+#if MR_CARRY_TILE == 32
+    // ── Warp path: shuffle intrinsics, no shared memory, no barriers ──────────
     for (int tile = tid; tile < n; tile += CARRY_TILE)
     {
 #ifdef MR_ADVANCED_MONITOR
@@ -108,9 +111,51 @@ __global__ static void carry_16bits(
         } while (ballot);
 
         tile_carry = escape;
-
         d_dst[dst_offset + tile] = currVal;
     }
+#else
+    // ── Block path: shared memory, works for any CARRY_TILE > 32 ─────────────
+    __shared__ Data64 s_carry[CARRY_TILE];
+    __shared__ int s_has_carry;
+
+    for (int tile = tid; tile < n; tile += CARRY_TILE)
+    {
+#ifdef MR_ADVANCED_MONITOR
+        if (tid == 0)
+            local_for++;
+#endif
+        Data64 currVal = d_src[src_offset + tile];
+        Data64 c = (tid == 0) ? tile_carry : 0ULL;
+        Data64 escape = 0;
+
+        do
+        {
+#ifdef MR_ADVANCED_MONITOR
+            if (tid == 0)
+                local_dowhile++;
+#endif
+            c += currVal;
+            currVal = c & LIMB_MASK;
+            c >>= LIMB_BITS;
+
+            s_carry[tid] = c;
+            if (tid == 0)
+                s_has_carry = 0;
+            __syncthreads();
+
+            escape += s_carry[CARRY_TILE - 1];
+            c = (tid > 0) ? s_carry[tid - 1] : 0ULL;
+
+            if (c > 0)
+                atomicOr(&s_has_carry, 1);
+            __syncthreads();
+
+        } while (s_has_carry);
+
+        tile_carry = escape;
+        d_dst[dst_offset + tile] = currVal;
+    }
+#endif
 
 #ifdef MR_ADVANCED_MONITOR
     if (tid == 0)
@@ -596,8 +641,8 @@ void Multiplier::carry_to_limbs(Data64 *d_out, int n_out, cudaStream_t s)
     carry_16bits<<<n_batch, CARRY_TILE, 0, s>>>(d_buf_A, d_out, n_out, padded, n_batch);
 
 #elif CARRY_NORM_ALG == CARRY_ALG_SEQUENTIAL
-    int blk = (n_batch + 31) / 32;
-    carry_sequential<<<blk, 32, 0, s>>>(d_out, d_buf_A, n_out, padded, n_batch);
+    int blk = (n_batch + CARRY_TILE - 1) / CARRY_TILE;
+    carry_sequential<<<blk, CARRY_TILE, 0, s>>>(d_out, d_buf_A, n_out, padded, n_batch);
 
 #elif CARRY_NORM_ALG == CARRY_ALG_PREFIX_SCAN
     pscan_normalize<<<n_batch, PSCAN_TILE, 0, s>>>(d_out, d_buf_A, n_out, padded, n_batch);
@@ -623,19 +668,19 @@ void Multiplier::carry_after_vadd(Data64 *d_dst, int n_dst, cudaStream_t s)
 }
 
 void Multiplier::add_raw_buf_and_carry(Data64 *d_dst, int n_dst,
-                                           cudaStream_t s)
+                                       cudaStream_t s)
 {
 #if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE || CARRY_NORM_ALG == CARRY_ALG_SINGLE_TILE || CARRY_NORM_ALG == CARRY_ALG_PREFIX_SCAN
     vadd_raw_buf(d_dst, n_dst, s);
     carry_after_vadd(d_dst, n_dst, s);
 #elif CARRY_NORM_ALG == CARRY_ALG_SEQUENTIAL
-    int blk = (n_batch + 31) / 32;
-    vadd_carry_sequential<<<blk, 32, 0, s>>>(d_dst, d_buf_A, n_dst, padded, n_batch);
+    int blk = (n_batch + CARRY_TILE - 1) / CARRY_TILE;
+    vadd_carry_sequential<<<blk, CARRY_TILE, 0, s>>>(d_dst, d_buf_A, n_dst, padded, n_batch);
 #endif
 }
 
 void Multiplier::add_and_carry(Data64 *d_a, const Data64 *d_b, int n, int n_passes,
-                                   cudaStream_t s)
+                               cudaStream_t s)
 {
 #if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     constexpr int THR = MR_CARRY_INTER_THR;
@@ -662,8 +707,8 @@ void Multiplier::add_and_carry(Data64 *d_a, const Data64 *d_b, int n, int n_pass
     unsigned bp = (unsigned)(n + THR - 1) / THR;
     vadd_batch<<<dim3(bp, (unsigned)n_batch), THR, 0, s>>>(
         d_a, d_a, d_b, n, n_batch);
-    int blk = (n_batch + 31) / 32;
-    carry_sequential<<<blk, 32, 0, s>>>(d_a, d_a, n, n, n_batch);
+    int blk = (n_batch + CARRY_TILE - 1) / CARRY_TILE;
+    carry_sequential<<<blk, CARRY_TILE, 0, s>>>(d_a, d_a, n, n, n_batch);
 
 #elif CARRY_NORM_ALG == CARRY_ALG_PREFIX_SCAN
     constexpr int THR = MR_THR_REDUCE;
