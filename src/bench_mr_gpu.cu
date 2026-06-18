@@ -459,8 +459,9 @@ int main(int argc, char *argv[])
                 batch_gidx.push_back(gi);
             }
 
-            char label_buf[32];
-            snprintf(label_buf, sizeof(label_buf), "round%d/%d", round + 1, max_rounds);
+            char label_buf[64];
+            snprintf(label_buf, sizeof(label_buf), "r%d b%d n=%d",
+                     round + 1, b + 1, batch_n_limbs);
             auto results = test_batch(batch_cands, batch_n_limbs, label_buf,
                                       show_report, show_progress);
 
