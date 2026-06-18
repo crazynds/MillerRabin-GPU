@@ -13,11 +13,11 @@
             throw std::runtime_error(std::string("[CUDA] " #expr ": ") + cudaGetErrorString(_e)); \
     } while (0)
 
-#define CUFFT_CHECK(expr)                                                                          \
-    do                                                                                             \
-    {                                                                                              \
-        cufftResult _r = (expr);                                                                   \
-        if (_r != CUFFT_SUCCESS)                                                                    \
+#define CUFFT_CHECK(expr)                                                                             \
+    do                                                                                                \
+    {                                                                                                 \
+        cufftResult _r = (expr);                                                                      \
+        if (_r != CUFFT_SUCCESS)                                                                      \
             throw std::runtime_error(std::string("[cuFFT] " #expr " failed: ") + std::to_string(_r)); \
     } while (0)
 
@@ -172,7 +172,7 @@ FftCuFFTBatch::FftCuFFTBatch(int n_limbs_, int n_batch_)
         throw std::runtime_error(
             "[fft_cufft] insufficient precision: fft_len(" + std::to_string(fft_len) +
             ")·(2^" + std::to_string((int)LIMB_BITS) + "-1)²·~4logN exceeds the 52-bit "
-            "mantissa of double. Reduce LIMB_BITS/size or use MUL_MERGE_GPUNTT.");
+                                                       "mantissa of double. Reduce LIMB_BITS/size or use MUL_MERGE_GPUNTT.");
 
     const size_t pb = (size_t)n_batch * padded * sizeof(Data64); // = n_batch*fft_len complex
     CU(cudaMalloc(&d_buf_AB, 2 * pb));
@@ -182,7 +182,9 @@ FftCuFFTBatch::FftCuFFTBatch(int n_limbs_, int n_batch_)
     CU(cudaMalloc(&d_cplx_tmp, pb));
 
     int n_tiles_max = (padded + CARRY_TILE - 1) / CARRY_TILE;
+#ifdef CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     CU(cudaMalloc(&d_tile_carry, (size_t)n_batch * n_tiles_max * sizeof(Data64)));
+#endif
 
     CUFFT_CHECK(cufftPlan1d(&plan_n, fft_len, CUFFT_Z2Z, n_batch));
     CUFFT_CHECK(cufftPlan1d(&plan_2n, fft_len, CUFFT_Z2Z, 2 * n_batch));
@@ -197,7 +199,9 @@ FftCuFFTBatch::~FftCuFFTBatch()
     cudaFree(d_buf_AB);
     cudaFree(d_int);
     cudaFree(d_cplx_tmp);
+#ifdef CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     cudaFree(d_tile_carry);
+#endif
 }
 
 // ── launch helpers ─────────────────────────────────────────────────────
@@ -283,9 +287,21 @@ void FftCuFFTBatch::intt_A(cudaStream_t s)
     scatter_int<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_buf_A, d_int, fft_len, padded, n_batch);
 }
 
-void FftCuFFTBatch::pmul_and_intt(cudaStream_t s) { pmul(s); intt_A(s); }
-void FftCuFFTBatch::psq_and_intt(cudaStream_t s) { psq(s); intt_A(s); }
-void FftCuFFTBatch::pmul_ext_and_intt(const Data64 *d_ext, cudaStream_t s) { pmul_ext(d_ext, s); intt_A(s); }
+void FftCuFFTBatch::pmul_and_intt(cudaStream_t s)
+{
+    pmul(s);
+    intt_A(s);
+}
+void FftCuFFTBatch::psq_and_intt(cudaStream_t s)
+{
+    psq(s);
+    intt_A(s);
+}
+void FftCuFFTBatch::pmul_ext_and_intt(const Data64 *d_ext, cudaStream_t s)
+{
+    pmul_ext(d_ext, s);
+    intt_A(s);
+}
 
 // ── schoolbook (does not use FFT; never called when MUL_ALG==MUL_FFT_CUFFT, but the
 //    interface requires the definition) ───────────────────────────────────────────────

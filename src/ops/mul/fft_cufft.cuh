@@ -52,12 +52,14 @@ struct FftCuFFTBatch
     int fft_len; // = padded / 2 (FFT length, in complex elements)
 
     // Complex buffers (A,B contiguous), reinterpreted from Data64.
-    Data64 *d_buf_AB = nullptr; // [2 * n_batch * padded] Data64 = 2*n_batch*fft_len complex
-    Data64 *d_buf_A = nullptr;  // = d_buf_AB
-    Data64 *d_buf_B = nullptr;  // = d_buf_AB + n_batch*padded
-    Data64 *d_int = nullptr;    // [n_batch * fft_len] integers (post-INTT staging)
+    Data64 *d_buf_AB = nullptr;   // [2 * n_batch * padded] Data64 = 2*n_batch*fft_len complex
+    Data64 *d_buf_A = nullptr;    // = d_buf_AB
+    Data64 *d_buf_B = nullptr;    // = d_buf_AB + n_batch*padded
+    Data64 *d_int = nullptr;      // [n_batch * fft_len] integers (post-INTT staging)
     Data64 *d_cplx_tmp = nullptr; // [n_batch * padded] complex (fwd_A staging)
+#ifdef CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     Data64 *d_tile_carry = nullptr;
+#endif
 
     cufftHandle plan_n = 0;  // C2C batch = n_batch
     cufftHandle plan_2n = 0; // C2C batch = 2*n_batch

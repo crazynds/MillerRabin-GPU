@@ -689,7 +689,7 @@ void Multiplier::add_and_carry(Data64 *d_a, const Data64 *d_b, int n, int n_pass
     vadd_batch<<<dim3(n_tiles, n_batch), CARRY_TILE, 0, s>>>(
         d_a, d_a, d_b, n, n_batch);
     carry_intra_copy<<<dim3(n_tiles, n_batch), CARRY_TILE, 0, s>>>(
-        d_a, d_a, d_tile_carry, n, n, n_batch, n_passes);
+        d_a, d_a, d_tile_carry, n, n, n_batch);
     carry_inter_tiles<<<inter_blk, THR, 0, s>>>(
         d_a, d_tile_carry, n, n_batch);
 
