@@ -15,12 +15,29 @@
 #if MOD_REDUCTION_ALG == MOD_RED_BARRETT
 
 // Local indices (children of perf_cur->child(PERF_RED)):
-namespace {
-    enum BarIdx { BAR_SHIFT = 0, BAR_Q2 = 1, BAR_QN = 2 };
+namespace
+{
+    enum BarIdx
+    {
+        BAR_SHIFT = 0,
+        BAR_Q2 = 1,
+        BAR_QN = 2
+    };
     // Children of Q2 and QN:
-    enum QIdx   { Q_NTT = 0, Q_PMUL = 1, Q_INTT = 2, Q_CARRY = 3 };
+    enum QIdx
+    {
+        Q_NTT = 0,
+        Q_PMUL = 1,
+        Q_INTT = 2,
+        Q_CARRY = 3
+    };
     // Children of perf_cur->child(PERF_FIN):
-    enum FinIdx { FIN_SUB = 0, FIN_CONDSUB = 1, FIN_COPY = 2 };
+    enum FinIdx
+    {
+        FIN_SUB = 0,
+        FIN_CONDSUB = 1,
+        FIN_COPY = 2
+    };
 }
 
 // ── specific GMP helpers ──────────────────────────────────────────────────────
@@ -128,11 +145,11 @@ void BatchModCtx::cond_sub_batch(Data64 *, cudaStream_t) {}
 void BatchModCtx::reduce_batch(Data64 *d_out, cudaStream_t s)
 {
     const int thr = MR_THR_REDUCE;
-    const int W1  = bar_W1;
+    const int W1 = bar_W1;
 
     PerfNode *red = perf_cur->child(PERF_RED);
-    PerfNode *q2  = red->child(BAR_Q2);
-    PerfNode *qn  = red->child(BAR_QN);
+    PerfNode *q2 = red->child(BAR_Q2);
+    PerfNode *qn = red->child(BAR_QN);
     PerfNode *fin = perf_cur->child(PERF_FIN);
 
     // Step 1: A1 = floor(T / b^{k_i-1}) → W1 limbs; q2 = A1·μ (NTT) → d_bar_prod.

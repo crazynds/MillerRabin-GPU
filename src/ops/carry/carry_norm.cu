@@ -46,13 +46,12 @@ __global__ static void vadd_from_raw_batch(
 //   CARRY_ALG_SEQUENTIAL  — 1 thread/candidate, pure sequential loop
 //   CARRY_ALG_PREFIX_SCAN — 1 block/candidate, PSCAN_TILE threads, carry-lookahead
 
-static constexpr int CARRY_TILE = MR_CARRY_TILE;
-
 // ── CARRY_ALG_SINGLE_TILE ────────────────────────────────────────────────────
 // 1 block per candidate, CARRY_TILE threads. Uses shared memory for carry
 // propagation — works for any CARRY_TILE (not limited to one warp).
 #if CARRY_NORM_ALG == CARRY_ALG_SINGLE_TILE
 
+static constexpr int CARRY_TILE = MR_CARRY_TILE;
 static_assert(CARRY_TILE >= 32 && (CARRY_TILE % 32) == 0,
               "CARRY_ALG_SINGLE_TILE requires CARRY_TILE to be a multiple of 32");
 
@@ -116,13 +115,13 @@ __global__ static void carry_16bits(
 #else
     // ── Block path: shared memory, works for any CARRY_TILE > 32 ─────────────
     __shared__ Data64 s_carry[CARRY_TILE];
-    __shared__ int s_has_carry;
+    __shared__ int s_has_carry[2];
+    int hc_idx = 0;
 
     for (int tile = tid; tile < n; tile += CARRY_TILE)
     {
 #ifdef MR_ADVANCED_MONITOR
-        if (tid == 0)
-            local_for++;
+        local_for++;
 #endif
         Data64 currVal = d_src[src_offset + tile];
         Data64 c = (tid == 0) ? tile_carry : 0ULL;
@@ -131,26 +130,26 @@ __global__ static void carry_16bits(
         do
         {
 #ifdef MR_ADVANCED_MONITOR
-            if (tid == 0)
-                local_dowhile++;
+            local_dowhile++;
 #endif
+            hc_idx ^= 1;
             c += currVal;
             currVal = c & LIMB_MASK;
             c >>= LIMB_BITS;
 
             s_carry[tid] = c;
             if (tid == 0)
-                s_has_carry = 0;
+                s_has_carry[hc_idx] = 0;
             __syncthreads();
 
             escape += s_carry[CARRY_TILE - 1];
             c = (tid > 0) ? s_carry[tid - 1] : 0ULL;
 
             if (c > 0)
-                atomicOr(&s_has_carry, 1);
+                s_has_carry[hc_idx] = 1;
             __syncthreads();
 
-        } while (s_has_carry);
+        } while (s_has_carry[hc_idx]);
 
         tile_carry = escape;
         d_dst[dst_offset + tile] = currVal;

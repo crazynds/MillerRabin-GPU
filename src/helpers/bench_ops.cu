@@ -24,9 +24,9 @@ using dsec = std::chrono::duration<double>;
 
 // ── Parameters ────────────────────────────────────────────────────────────────
 
-static constexpr double BENCH_SECS = 4.0;
+static constexpr double BENCH_SECS = 3.0;
 static constexpr int N_BATCH = MR_BATCH_SIZE;
-static constexpr int BIT_SIZES_SHORT[] = {512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
+static constexpr int BIT_SIZES_SHORT[] = {512, 1024, 2048, 4096, 8192, 16384};
 static constexpr int BIT_SIZES_LONG[] = {512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

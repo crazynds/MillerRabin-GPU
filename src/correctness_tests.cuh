@@ -686,7 +686,7 @@ static void run_correctness_tests(BatchModCtx &mont,
                 for (int i = 0; i < nb; i++)
                 {
                     uint32_t e = EXP32W;
-                    for (int j = 0; j < (int)(32 / LIMB_BITS) && j < n; j++)
+                    for (int j = 0; j < (int)((32 + LIMB_BITS - 1) / LIMB_BITS) && j < n; j++)
                     {
                         exp32w_all[i * n + j] = e & LIMB_MASK;
                         e >>= LIMB_BITS;
