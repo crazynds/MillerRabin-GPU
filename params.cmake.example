@@ -36,7 +36,7 @@ set(MR_PROGRESS_INTERVAL_MS 2000)
 
 # Advanced monitor: prints carry iteration statistics (adds overhead).
 # ON | OFF
-set(MR_ADVANCED_MONITOR ON)
+set(MR_ADVANCED_MONITOR OFF)
 
 # Limb base: each limb is a digit in base 2^LIMB_BITS.
 # Smaller (e.g. 8) → more limbs (slower) but much more precision headroom for the
@@ -80,7 +80,7 @@ set(MOD_REDUCTION_ALG MOD_RED_BARRETT)
 # Enable kernel tables optimized for the RTX 4090 (Compute Capability 8.9).
 # ON  → use CC_89 configs for n_power 27 and 28 (shared_mem 1024×T, larger grids)
 # OFF → use generic configs for those ranges
-set(GPUNTT_CC89 OFF)
+set(GPUNTT_CC89 ON)
 
 # NTT layout in the batch:
 #   PerPolynomial  — NTT per row (per candidate). Recommended default.
