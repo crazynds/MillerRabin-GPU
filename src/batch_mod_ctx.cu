@@ -15,10 +15,11 @@
 // ── verification kernel (generic) ──────────────────────────────────────────
 
 // One block per candidate. Checks whether r == ref_a OR r == ref_b (working form).
+template <typename T>
 __global__ static void check_passed_kernel(
-    const Data64 *__restrict__ r,
-    const Data64 *__restrict__ ref_a, // 1   in working form
-    const Data64 *__restrict__ ref_b, // N-1 in working form
+    const T *__restrict__ r,
+    const T *__restrict__ ref_a, // 1   in working form
+    const T *__restrict__ ref_b, // N-1 in working form
     uint8_t *__restrict__ passed,
     int n_limbs)
 {
@@ -31,12 +32,14 @@ __global__ static void check_passed_kernel(
     }
     __syncthreads();
 
-    const Data64 *rv = r + (size_t)t * n_limbs;
-    const Data64 *ra = ref_a + (size_t)t * n_limbs;
-    const Data64 *rb = ref_b + (size_t)t * n_limbs;
+    const T *rv = r + (size_t)t * n_limbs;
+    const T *ra = ref_a + (size_t)t * n_limbs;
+    const T *rb = ref_b + (size_t)t * n_limbs;
 
     for (int j = (int)threadIdx.x; j < n_limbs; j += (int)blockDim.x)
     {
+        // Working-form limbs are exact integer-valued (< 2^LIMB_BITS), so == is exact
+        // for both Data64 and double.
         if (rv[j] != ra[j])
             atomicAnd(&match_a, 0);
         if (rv[j] != rb[j])
@@ -101,7 +104,7 @@ BatchModCtx::BatchModCtx(const std::vector<uint64_t> &N_all, int n_limbs_, int n
     CU(cudaMalloc(&d_one_res, nb));
     CU(cudaMalloc(&d_Nm1_res, nb));
 
-    CU(cudaMemcpy(d_N, N_all.data(), nb, cudaMemcpyHostToDevice));
+    CU(limb_upload(d_N, N_all.data(), (size_t)n_batch * n_limbs));
 
     ntt.ntt_A(d_N, n_limbs);
     CU(cudaMemcpy(d_ntt_N, ntt.d_buf_A, pb, cudaMemcpyDeviceToDevice));
@@ -132,8 +135,8 @@ BatchModCtx::BatchModCtx(const std::vector<uint64_t> &N_all, int n_limbs_, int n
     std::vector<uint64_t> one_res_h, Nm1_res_h;
     to_residue_batch(one_lims, one_res_h);
     to_residue_batch(Nm1_lims, Nm1_res_h);
-    CU(cudaMemcpy(d_one_res, one_res_h.data(), nb, cudaMemcpyHostToDevice));
-    CU(cudaMemcpy(d_Nm1_res, Nm1_res_h.data(), nb, cudaMemcpyHostToDevice));
+    CU(limb_upload(d_one_res, one_res_h.data(), (size_t)n_batch * n_limbs));
+    CU(limb_upload(d_Nm1_res, Nm1_res_h.data(), (size_t)n_batch * n_limbs));
 
     timer.init();
     perf_mul = build_perf_nodes("mul");
@@ -202,7 +205,7 @@ void BatchModCtx::to_residue_batch(const std::vector<uint64_t> &x_all,
 {
     out_all.resize((size_t)n_batch * n_limbs, 0);
     std::vector<uint64_t> N_h((size_t)n_batch * n_limbs);
-    CU(cudaMemcpy(N_h.data(), d_N, N_h.size() * sizeof(uint64_t), cudaMemcpyDeviceToHost));
+    CU(limb_download(N_h.data(), d_N, N_h.size()));
 
     mpz_t xm, N, res;
     mpz_init(xm);
@@ -220,14 +223,14 @@ void BatchModCtx::to_residue_batch(const std::vector<uint64_t> &x_all,
     mpz_clear(res);
 }
 
-void BatchModCtx::from_residue_batch(const Data64 *d_x, std::vector<uint64_t> &out_all) const
+void BatchModCtx::from_residue_batch(const LimbT *d_x, std::vector<uint64_t> &out_all) const
 {
     out_all.resize((size_t)n_batch * n_limbs, 0);
 
     std::vector<uint64_t> x_h((size_t)n_batch * n_limbs);
     std::vector<uint64_t> N_h((size_t)n_batch * n_limbs);
-    CU(cudaMemcpy(x_h.data(), d_x, x_h.size() * sizeof(uint64_t), cudaMemcpyDeviceToHost));
-    CU(cudaMemcpy(N_h.data(), d_N, N_h.size() * sizeof(uint64_t), cudaMemcpyDeviceToHost));
+    CU(limb_download(x_h.data(), d_x, x_h.size()));
+    CU(limb_download(N_h.data(), d_N, N_h.size()));
 
     mpz_t xm, N, res;
     mpz_init(xm);
@@ -245,16 +248,16 @@ void BatchModCtx::from_residue_batch(const Data64 *d_x, std::vector<uint64_t> &o
     mpz_clear(res);
 }
 
-void BatchModCtx::check_passed(const Data64 *d_r, uint8_t *d_passed,
+void BatchModCtx::check_passed(const LimbT *d_r, uint8_t *d_passed,
                                cudaStream_t s) const
 {
-    check_passed_kernel<<<n_batch, MR_THR_CHECK, 0, s>>>(
+    check_passed_kernel<LimbT><<<n_batch, MR_THR_CHECK, 0, s>>>(
         d_r, d_one_res, d_Nm1_res, d_passed, n_limbs);
 }
 
 // ── modmul / modsq drivers ────────────────────────────────────────────────────
 
-void BatchModCtx::modmul_batch(const Data64 *d_A, const Data64 *d_B, Data64 *d_out,
+void BatchModCtx::modmul_batch(const LimbT *d_A, const LimbT *d_B, LimbT *d_out,
                                cudaStream_t s)
 {
     perf_cur = perf_mul;
@@ -285,7 +288,7 @@ void BatchModCtx::modmul_batch(const Data64 *d_A, const Data64 *d_B, Data64 *d_o
     perf_flush(s);
 }
 
-void BatchModCtx::modsq_batch(const Data64 *d_A, Data64 *d_out, cudaStream_t s)
+void BatchModCtx::modsq_batch(const LimbT *d_A, LimbT *d_out, cudaStream_t s)
 {
     perf_cur = perf_sq;
     PerfNode *prod = perf_cur->child(PERF_PROD);
@@ -317,8 +320,8 @@ void BatchModCtx::modsq_batch(const Data64 *d_A, Data64 *d_out, cudaStream_t s)
 
 // ── multiplications without reduction (benchmark) ────────────────────────────────────
 
-void BatchModCtx::mul_no_redc_batch(const Data64 *d_A, const Data64 *d_B,
-                                    Data64 *d_out, cudaStream_t s)
+void BatchModCtx::mul_no_redc_batch(const LimbT *d_A, const LimbT *d_B,
+                                    LimbT *d_out, cudaStream_t s)
 {
     ntt.ntt_AB(d_A, d_B, n_limbs, s);
     ntt.pmul_and_intt(s);
@@ -326,7 +329,7 @@ void BatchModCtx::mul_no_redc_batch(const Data64 *d_A, const Data64 *d_B,
     cudaStreamSynchronize(s);
 }
 
-void BatchModCtx::sq_no_redc_batch(const Data64 *d_A, Data64 *d_out, cudaStream_t s)
+void BatchModCtx::sq_no_redc_batch(const LimbT *d_A, LimbT *d_out, cudaStream_t s)
 {
     ntt.ntt_A(d_A, n_limbs, s);
     ntt.psq_and_intt(s);

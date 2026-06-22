@@ -18,9 +18,9 @@ inline const std::vector<uint32_t> DEFAULT_WITNESSES = {
 // Selects table[w] for each candidate given a window of WINDOW_BITS bits.
 // Declared here so it can be referenced in correctness_tests.cuh.
 __global__ void select_window_kernel(
-    Data64 *__restrict__,
-    const Data64 *__restrict__,
-    const Data64 *__restrict__,
+    LimbT *__restrict__,        // d_out (residue table entry)
+    const LimbT *__restrict__,  // d_table (residues)
+    const Data64 *__restrict__, // d_exp (exponent: bit-addressed, stays Data64)
     int, int, int, int);
 
 // For numbers where N-1 = 2*d (s=1).

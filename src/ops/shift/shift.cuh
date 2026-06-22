@@ -9,14 +9,14 @@ namespace ops
 {
     // dst[cand*n_out + j] = src[cand*n_src + j + offset] (0 outside the range).
     // Right shift by `offset` limbs, the same for all candidates.
-    void shift_right(Data64 *dst, const Data64 *src, int offset,
+    void shift_right(LimbT *dst, const LimbT *src, int offset,
                      int n_out, int n_src, int n_batch, int thr, cudaStream_t s);
 
     // Same, but offset = bark[cand] + delta (per-candidate).
-    void shift_right_var(Data64 *dst, const Data64 *src, const int *bark, int delta,
+    void shift_right_var(LimbT *dst, const LimbT *src, const int *bark, int delta,
                          int n_out, int n_src, int n_batch, int thr, cudaStream_t s);
 
     // dst[cand*padded + j] = (j < n_low) ? src[cand*n_sum + j] : 0 — extracts low limbs.
-    void extract_low(Data64 *dst, const Data64 *src, int n_low, int padded,
+    void extract_low(LimbT *dst, const LimbT *src, int n_low, int padded,
                      int n_sum, int n_batch, int thr, cudaStream_t s);
 }

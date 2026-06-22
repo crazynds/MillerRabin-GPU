@@ -17,7 +17,7 @@ static constexpr int CARRY_TILE = MR_CARRY_TILE;
 
 // ── kernels (double2 for load/round; Complex64 for pointwise via operators) ────
 
-__global__ static void load_complex(double2 *__restrict__ dst, const Data64 *__restrict__ src,
+__global__ static void load_complex(double2 *__restrict__ dst, const LimbT *__restrict__ src,
                                     int n_src, int fft_len, int n_batch)
 {
     int cand = blockIdx.y;
@@ -28,14 +28,14 @@ __global__ static void load_complex(double2 *__restrict__ dst, const Data64 *__r
     dst[(size_t)cand * fft_len + j] = make_double2(v, 0.0);
 }
 
-__global__ static void load_complex_from_buf(double2 *__restrict__ dst, const Data64 *__restrict__ buf,
+__global__ static void load_complex_from_buf(double2 *__restrict__ dst, const double *__restrict__ buf,
                                              int fft_len, int padded, int n_batch)
 {
     int cand = blockIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (cand >= n_batch || j >= fft_len)
         return;
-    dst[(size_t)cand * fft_len + j] = make_double2((double)buf[(size_t)cand * padded + j], 0.0);
+    dst[(size_t)cand * fft_len + j] = make_double2(buf[(size_t)cand * padded + j], 0.0);
 }
 
 __global__ static void cmul_kernel(Complex64 *__restrict__ a, const Complex64 *__restrict__ b, int total)
@@ -52,64 +52,54 @@ __global__ static void csq_kernel(Complex64 *__restrict__ a, int total)
     a[i] = a[i] * a[i];
 }
 
-// INVERSE already normalized by the lib (mod_inverse = 1/N). Reads real part, rounds.
-__global__ static void round_extract(Data64 *__restrict__ d_int, const double2 *__restrict__ src,
-                                     int fft_len, int n_batch)
+// INVERSE already normalized by the lib (mod_inverse = 1/N). Writes the (un-rounded)
+// real coefficient into d_real [stride padded] = raw_coeffs(). Rounding/clamp happens
+// at the carry boundary via limb_ld. Fuses the old round_extract + scatter_int.
+__global__ static void extract_real(double *__restrict__ d_real, const double2 *__restrict__ src,
+                                    int fft_len, int padded, int n_batch)
 {
     int cand = blockIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (cand >= n_batch || j >= fft_len) return;
-    long long v = llround(src[(size_t)cand * fft_len + j].x);
-    d_int[(size_t)cand * fft_len + j] = (Data64)(v < 0 ? 0 : v);
+    d_real[(size_t)cand * padded + j] = src[(size_t)cand * fft_len + j].x;
 }
 
-__global__ static void scatter_int(Data64 *__restrict__ d_buf_A, const Data64 *__restrict__ d_int,
-                                   int fft_len, int padded, int n_batch)
+// schoolbook is never called when MUL_ALG==MUL_FFT_GPUFFT; signature must match LimbT.
+// Writes into raw_coeffs() (d_real, stride padded).
+__global__ static void schoolbook_mul_kernel(double *__restrict__ out_raw, const LimbT *__restrict__ d_A,
+                                             const LimbT *__restrict__ d_B, int n_limbs, int fft_len, int padded, int n_batch)
 {
     int cand = blockIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (cand >= n_batch || j >= fft_len) return;
-    d_buf_A[(size_t)cand * padded + j] = d_int[(size_t)cand * fft_len + j];
-}
-
-__global__ static void schoolbook_mul_kernel(Data64 *__restrict__ d_buf_A, const Data64 *__restrict__ d_A,
-                                             const Data64 *__restrict__ d_B, int n_limbs, int fft_len, int padded, int n_batch)
-{
-    int cand = blockIdx.y;
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (cand >= n_batch || j >= fft_len) return;
-    Data64 out = 0;
+    uint64_t acc = 0;
     if (j < 2 * n_limbs)
     {
-        const Data64 *A = d_A + (size_t)cand * n_limbs, *B = d_B + (size_t)cand * n_limbs;
-        uint64_t acc = 0;
+        const LimbT *A = d_A + (size_t)cand * n_limbs, *B = d_B + (size_t)cand * n_limbs;
         int i_lo = (j >= n_limbs) ? j - n_limbs + 1 : 0;
         int i_hi = (j < n_limbs) ? j + 1 : n_limbs;
-        for (int i = i_lo; i < i_hi; i++) acc += A[i] * B[j - i];
-        out = acc;
+        for (int i = i_lo; i < i_hi; i++) acc += limb_ld(A[i]) * limb_ld(B[j - i]);
     }
-    d_buf_A[(size_t)cand * padded + j] = out;
+    out_raw[(size_t)cand * padded + j] = (double)acc;
 }
 
-__global__ static void schoolbook_sq_kernel(Data64 *__restrict__ d_buf_A, const Data64 *__restrict__ d_A,
+__global__ static void schoolbook_sq_kernel(double *__restrict__ out_raw, const LimbT *__restrict__ d_A,
                                             int n_limbs, int fft_len, int padded, int n_batch)
 {
     int cand = blockIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (cand >= n_batch || j >= fft_len) return;
-    Data64 out = 0;
+    uint64_t acc = 0;
     if (j < 2 * n_limbs)
     {
-        const Data64 *A = d_A + (size_t)cand * n_limbs;
-        uint64_t acc = 0;
+        const LimbT *A = d_A + (size_t)cand * n_limbs;
         int i_lo = (j >= n_limbs) ? j - n_limbs + 1 : 0;
         int i_hi_excl = (j < n_limbs) ? j + 1 : n_limbs;
         int i_cross = (j + 1) / 2;
-        for (int i = i_lo; i < i_cross && i < i_hi_excl; i++) acc += 2ULL * A[i] * A[j - i];
-        if (j % 2 == 0) { int m = j / 2; if (m >= i_lo && m < i_hi_excl) acc += A[m] * A[m]; }
-        out = acc;
+        for (int i = i_lo; i < i_cross && i < i_hi_excl; i++) acc += 2ULL * limb_ld(A[i]) * limb_ld(A[j - i]);
+        if (j % 2 == 0) { int m = j / 2; if (m >= i_lo && m < i_hi_excl) acc += limb_ld(A[m]) * limb_ld(A[m]); }
     }
-    d_buf_A[(size_t)cand * padded + j] = out;
+    out_raw[(size_t)cand * padded + j] = (double)acc;
 }
 
 // ── ctor / dtor ───────────────────────────────────────────────────────────────
@@ -160,7 +150,7 @@ FftGpuFftBatch::FftGpuFftBatch(int n_limbs_, int n_batch_)
     CU(cudaMalloc(&d_buf_AB, 2 * pb));
     d_buf_A = d_buf_AB;
     d_buf_B = d_buf_AB + (size_t)n_batch * padded;
-    CU(cudaMalloc(&d_int, (size_t)n_batch * fft_len * sizeof(Data64)));
+    CU(cudaMalloc(&d_real, (size_t)n_batch * padded * sizeof(double)));
     CU(cudaMalloc(&d_cplx_tmp, pb));
     int n_tiles_max = (padded + CARRY_TILE - 1) / CARRY_TILE;
     CU(cudaMalloc(&d_tile_carry, (size_t)n_batch * n_tiles_max * sizeof(Data64)));
@@ -171,7 +161,7 @@ FftGpuFftBatch::~FftGpuFftBatch()
     cudaFree(d_root_fwd);
     cudaFree(d_root_inv);
     cudaFree(d_buf_AB);
-    cudaFree(d_int);
+    cudaFree(d_real);
     cudaFree(d_cplx_tmp);
     cudaFree(d_tile_carry);
 }
@@ -191,7 +181,7 @@ void FftGpuFftBatch::run_fft(Data64 *buf, bool fwd, int batch, cudaStream_t s)
     GPU_FFT(reinterpret_cast<Complex64 *>(buf), fwd ? d_root_fwd : d_root_inv, cfg, batch, false);
 }
 
-void FftGpuFftBatch::ntt_A(const Data64 *d_src, int n_src, cudaStream_t s)
+void FftGpuFftBatch::ntt_A(const LimbT *d_src, int n_src, cudaStream_t s)
 {
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
@@ -199,7 +189,7 @@ void FftGpuFftBatch::ntt_A(const Data64 *d_src, int n_src, cudaStream_t s)
     run_fft(d_buf_A, /*fwd=*/true, n_batch, s);
 }
 
-void FftGpuFftBatch::ntt_B(const Data64 *d_src, int n_src, cudaStream_t s)
+void FftGpuFftBatch::ntt_B(const LimbT *d_src, int n_src, cudaStream_t s)
 {
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
@@ -207,7 +197,7 @@ void FftGpuFftBatch::ntt_B(const Data64 *d_src, int n_src, cudaStream_t s)
     run_fft(d_buf_B, /*fwd=*/true, n_batch, s);
 }
 
-void FftGpuFftBatch::ntt_AB(const Data64 *d_srcA, const Data64 *d_srcB, int n_src, cudaStream_t s)
+void FftGpuFftBatch::ntt_AB(const LimbT *d_srcA, const LimbT *d_srcB, int n_src, cudaStream_t s)
 {
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
@@ -220,7 +210,8 @@ void FftGpuFftBatch::fwd_A(cudaStream_t s)
 {
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
-    load_complex_from_buf<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(reinterpret_cast<double2 *>(d_cplx_tmp), d_buf_A, fft_len, padded, n_batch);
+    load_complex_from_buf<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
+        reinterpret_cast<double2 *>(d_cplx_tmp), reinterpret_cast<const double *>(d_buf_A), fft_len, padded, n_batch);
     run_fft(d_cplx_tmp, /*fwd=*/true, n_batch, s);
     CU(cudaMemcpyAsync(d_buf_A, d_cplx_tmp, (size_t)n_batch * padded * sizeof(Data64), cudaMemcpyDeviceToDevice, s));
 }
@@ -248,22 +239,23 @@ void FftGpuFftBatch::intt_A(cudaStream_t s)
     run_fft(d_buf_A, /*fwd=*/false, n_batch, s);
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
-    round_extract<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_int, reinterpret_cast<double2 *>(d_buf_A), fft_len, n_batch);
-    scatter_int<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_buf_A, d_int, fft_len, padded, n_batch);
+    // Single pass: gather real parts into d_real (= raw_coeffs(), stride padded).
+    extract_real<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
+        d_real, reinterpret_cast<double2 *>(d_buf_A), fft_len, padded, n_batch);
 }
 
 void FftGpuFftBatch::pmul_and_intt(cudaStream_t s) { pmul(s); intt_A(s); }
 void FftGpuFftBatch::psq_and_intt(cudaStream_t s) { psq(s); intt_A(s); }
 void FftGpuFftBatch::pmul_ext_and_intt(const Data64 *d_ext, cudaStream_t s) { pmul_ext(d_ext, s); intt_A(s); }
 
-void FftGpuFftBatch::schoolbook_mul(const Data64 *d_A, const Data64 *d_B, int n_src, cudaStream_t s)
+void FftGpuFftBatch::schoolbook_mul(const LimbT *d_A, const LimbT *d_B, int n_src, cudaStream_t s)
 {
     constexpr int thr = MR_THR_PMUL; unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
-    schoolbook_mul_kernel<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_buf_A, d_A, d_B, n_src, fft_len, padded, n_batch);
+    schoolbook_mul_kernel<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_real, d_A, d_B, n_src, fft_len, padded, n_batch);
 }
 
-void FftGpuFftBatch::schoolbook_sq(const Data64 *d_A, int n_src, cudaStream_t s)
+void FftGpuFftBatch::schoolbook_sq(const LimbT *d_A, int n_src, cudaStream_t s)
 {
     constexpr int thr = MR_THR_PMUL; unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
-    schoolbook_sq_kernel<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_buf_A, d_A, n_src, fft_len, padded, n_batch);
+    schoolbook_sq_kernel<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_real, d_A, n_src, fft_len, padded, n_batch);
 }

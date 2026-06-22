@@ -98,13 +98,13 @@ static void run_correctness_tests(BatchModCtx &mont,
                                   const std::vector<uint64_t> &N_all)
 {
     int n = mont.n_limbs, nb = mont.n_batch;
-    size_t total_bytes = (size_t)nb * n * sizeof(Data64);
+    size_t total_bytes = (size_t)nb * n * sizeof(LimbT);
 
     printf("\n=== Correctness tests (LIMB_BITS=%d, n_batch=%d) ===\n",
            LIMB_BITS, nb);
 
     std::vector<uint64_t> N_h((size_t)nb * n);
-    CU(cudaMemcpy(N_h.data(), mont.d_N, N_h.size() * sizeof(uint64_t), cudaMemcpyDeviceToHost));
+    CU(limb_download(N_h.data(), mont.d_N, N_h.size()));
 
     // ── Test value sets ─────────────────────────────────────────
     // small: x = i+2  (small values)
@@ -192,7 +192,7 @@ static void run_correctness_tests(BatchModCtx &mont,
     };
 
     // Allocate GPU buffers reused across all pairs
-    Data64 *d_x, *d_y, *d_out;
+    LimbT *d_x, *d_y, *d_out;
     CU(cudaMalloc(&d_x, total_bytes));
     CU(cudaMalloc(&d_y, total_bytes));
     CU(cudaMalloc(&d_out, total_bytes));
@@ -217,8 +217,8 @@ static void run_correctness_tests(BatchModCtx &mont,
         std::vector<uint64_t> x_mont, y_mont;
         mont.to_residue_batch(x_cur, x_mont);
         mont.to_residue_batch(y_cur, y_mont);
-        CU(cudaMemcpy(d_x, x_mont.data(), total_bytes, cudaMemcpyHostToDevice));
-        CU(cudaMemcpy(d_y, y_mont.data(), total_bytes, cudaMemcpyHostToDevice));
+        CU(limb_upload(d_x, x_mont.data(), (size_t)nb * n));
+        CU(limb_upload(d_y, y_mont.data(), (size_t)nb * n));
 
         int pass = 0, fail = 0;
 
@@ -258,13 +258,13 @@ static void run_correctness_tests(BatchModCtx &mont,
             CU(cudaDeviceSynchronize());
 
             int n_sum = mont.n_sum;
-            Data64 *d_T_test;
+            LimbT *d_T_test;
             CU(cudaMalloc(&d_T_test, (size_t)nb * n_sum * sizeof(Data64)));
             mont.ntt.carry_to_limbs(d_T_test, n_sum, 0);
             CU(cudaDeviceSynchronize());
 
             std::vector<uint64_t> raw_mul((size_t)nb * n_sum);
-            CU(cudaMemcpy(raw_mul.data(), d_T_test, raw_mul.size() * sizeof(uint64_t), cudaMemcpyDeviceToHost));
+            CU(limb_download(raw_mul.data(), d_T_test, raw_mul.size()));
 
             int rp2 = 0, rf2 = 0;
             for (int i = 0; i < nb && i < 2; i++)
@@ -309,7 +309,7 @@ static void run_correctness_tests(BatchModCtx &mont,
             printf("%d/2 OK\n", rp2);
             CU(cudaFree(d_T_test));
             // Restore d_x with x_mont
-            CU(cudaMemcpy(d_x, x_mont.data(), total_bytes, cudaMemcpyHostToDevice));
+            CU(limb_upload(d_x, x_mont.data(), (size_t)nb * n));
         }
 
         // ── Test 1: mont_sq ──────────────────────────────────────────────────
@@ -338,7 +338,7 @@ static void run_correctness_tests(BatchModCtx &mont,
                         print_limbs("expected", ref.data(), NPRINT);
                         print_limbs("obtained", sq_result.data() + i * n, NPRINT);
                         std::vector<uint64_t> raw_out((size_t)nb * n);
-                        CU(cudaMemcpy(raw_out.data(), d_out, (size_t)nb * n * sizeof(uint64_t), cudaMemcpyDeviceToHost));
+                        CU(limb_download(raw_out.data(), d_out, raw_out.size()));
                         print_limbs("raw GPU ", raw_out.data() + i * n, NPRINT);
                     }
                 }
@@ -350,7 +350,7 @@ static void run_correctness_tests(BatchModCtx &mont,
         pass = 0;
         fail = 0;
         printf("  [mont_mul] ");
-        CU(cudaMemcpy(d_x, x_mont.data(), total_bytes, cudaMemcpyHostToDevice));
+        CU(limb_upload(d_x, x_mont.data(), (size_t)nb * n));
         mont.modmul_batch(d_x, d_y, d_out);
         CU(cudaDeviceSynchronize());
         {
@@ -380,9 +380,9 @@ static void run_correctness_tests(BatchModCtx &mont,
         fail = 0;
         printf("  [sq x16]   ");
         {
-            CU(cudaMemcpy(d_x, x_mont.data(), total_bytes, cudaMemcpyHostToDevice));
-            Data64 *cur = d_x;
-            Data64 *tmp = d_out;
+            CU(limb_upload(d_x, x_mont.data(), (size_t)nb * n));
+            LimbT *cur = d_x;
+            LimbT *tmp = d_out;
             for (int k = 0; k < 16; k++)
             {
                 mont.modsq_batch(cur, tmp);
@@ -431,9 +431,9 @@ static void run_correctness_tests(BatchModCtx &mont,
         fail = 0;
         printf("  [sq==mul]  ");
         {
-            CU(cudaMemcpy(d_x, x_mont.data(), total_bytes, cudaMemcpyHostToDevice));
-            CU(cudaMemcpy(d_y, x_mont.data(), total_bytes, cudaMemcpyHostToDevice));
-            Data64 *d_sq_out;
+            CU(limb_upload(d_x, x_mont.data(), (size_t)nb * n));
+            CU(limb_upload(d_y, x_mont.data(), (size_t)nb * n));
+            LimbT *d_sq_out;
             CU(cudaMalloc(&d_sq_out, total_bytes));
             mont.modsq_batch(d_x, d_out);
             mont.modmul_batch(d_x, d_y, d_sq_out);
@@ -483,7 +483,7 @@ static void run_correctness_tests(BatchModCtx &mont,
             }
             std::vector<uint64_t> nm1_mont;
             mont.to_residue_batch(nm1_all, nm1_mont);
-            CU(cudaMemcpy(d_x, nm1_mont.data(), total_bytes, cudaMemcpyHostToDevice));
+            CU(limb_upload(d_x, nm1_mont.data(), (size_t)nb * n));
             mont.modsq_batch(d_x, d_out);
             CU(cudaDeviceSynchronize());
             std::vector<uint64_t> nm1sq;
@@ -512,17 +512,17 @@ static void run_correctness_tests(BatchModCtx &mont,
         fail = 0;
         printf("  [commut]   ");
         {
-            CU(cudaMemcpy(d_x, x_mont.data(), total_bytes, cudaMemcpyHostToDevice));
-            CU(cudaMemcpy(d_y, y_mont.data(), total_bytes, cudaMemcpyHostToDevice));
-            Data64 *d_xy, *d_yx;
+            CU(limb_upload(d_x, x_mont.data(), (size_t)nb * n));
+            CU(limb_upload(d_y, y_mont.data(), (size_t)nb * n));
+            LimbT *d_xy, *d_yx;
             CU(cudaMalloc(&d_xy, total_bytes));
             CU(cudaMalloc(&d_yx, total_bytes));
             mont.modmul_batch(d_x, d_y, d_xy);
             mont.modmul_batch(d_y, d_x, d_yx);
             CU(cudaDeviceSynchronize());
             std::vector<uint64_t> xy_h((size_t)nb * n), yx_h((size_t)nb * n);
-            CU(cudaMemcpy(xy_h.data(), d_xy, total_bytes, cudaMemcpyDeviceToHost));
-            CU(cudaMemcpy(yx_h.data(), d_yx, total_bytes, cudaMemcpyDeviceToHost));
+            CU(limb_download(xy_h.data(), d_xy, xy_h.size()));
+            CU(limb_download(yx_h.data(), d_yx, yx_h.size()));
             for (int i = 0; i < nb; i++)
             {
                 if (limbs_eq(xy_h.data() + i * n, yx_h.data() + i * n, n))
@@ -549,10 +549,10 @@ static void run_correctness_tests(BatchModCtx &mont,
                 one_plain[i * n] = 1;
             std::vector<uint64_t> one_mont_v;
             mont.to_residue_batch(one_plain, one_mont_v);
-            Data64 *d_one2;
+            LimbT *d_one2;
             CU(cudaMalloc(&d_one2, total_bytes));
-            CU(cudaMemcpy(d_x, x_mont.data(), total_bytes, cudaMemcpyHostToDevice));
-            CU(cudaMemcpy(d_one2, one_mont_v.data(), total_bytes, cudaMemcpyHostToDevice));
+            CU(limb_upload(d_x, x_mont.data(), (size_t)nb * n));
+            CU(limb_upload(d_one2, one_mont_v.data(), (size_t)nb * n));
             mont.modmul_batch(d_x, d_one2, d_out);
             CU(cudaDeviceSynchronize());
             std::vector<uint64_t> id_res;
@@ -587,12 +587,12 @@ static void run_correctness_tests(BatchModCtx &mont,
                 one_plain[i * n] = 1;
             std::vector<uint64_t> one_m;
             mont.to_residue_batch(one_plain, one_m);
-            Data64 *d_acc, *d_base32, *d_tmp32;
+            LimbT *d_acc, *d_base32, *d_tmp32;
             CU(cudaMalloc(&d_acc, total_bytes));
             CU(cudaMalloc(&d_base32, total_bytes));
             CU(cudaMalloc(&d_tmp32, total_bytes));
-            CU(cudaMemcpy(d_acc, one_m.data(), total_bytes, cudaMemcpyHostToDevice));
-            CU(cudaMemcpy(d_base32, x_mont.data(), total_bytes, cudaMemcpyHostToDevice));
+            CU(limb_upload(d_acc, one_m.data(), (size_t)nb * n));
+            CU(limb_upload(d_base32, x_mont.data(), (size_t)nb * n));
             for (int bit = 31; bit >= 0; bit--)
             {
                 mont.modsq_batch(d_acc, d_tmp32);
@@ -650,13 +650,13 @@ static void run_correctness_tests(BatchModCtx &mont,
                 one_plain2[i * n] = 1;
             std::vector<uint64_t> one_m2;
             mont.to_residue_batch(one_plain2, one_m2);
-            Data64 *d_ref_acc, *d_win_acc, *d_base_w, *d_tmp_w;
+            LimbT *d_ref_acc, *d_win_acc, *d_base_w, *d_tmp_w;
             CU(cudaMalloc(&d_ref_acc, total_bytes));
             CU(cudaMalloc(&d_win_acc, total_bytes));
             CU(cudaMalloc(&d_base_w, total_bytes));
             CU(cudaMalloc(&d_tmp_w, total_bytes));
-            CU(cudaMemcpy(d_ref_acc, one_m2.data(), total_bytes, cudaMemcpyHostToDevice));
-            CU(cudaMemcpy(d_base_w, x_mont.data(), total_bytes, cudaMemcpyHostToDevice));
+            CU(limb_upload(d_ref_acc, one_m2.data(), (size_t)nb * n));
+            CU(limb_upload(d_base_w, x_mont.data(), (size_t)nb * n));
             // Reference: bit-by-bit sq-and-mul
             for (int bit = 31; bit >= 0; bit--)
             {
@@ -671,14 +671,14 @@ static void run_correctness_tests(BatchModCtx &mont,
             // Window k=4
             {
                 constexpr int K = 4, SZ = 1 << K;
-                std::vector<Data64 *> tbl(SZ);
+                std::vector<LimbT *> tbl(SZ);
                 for (int w = 0; w < SZ; w++)
                     CU(cudaMalloc(&tbl[w], total_bytes));
-                CU(cudaMemcpy(tbl[0], one_m2.data(), total_bytes, cudaMemcpyHostToDevice));
-                CU(cudaMemcpy(tbl[1], x_mont.data(), total_bytes, cudaMemcpyHostToDevice));
+                CU(limb_upload(tbl[0], one_m2.data(), (size_t)nb * n));
+                CU(limb_upload(tbl[1], x_mont.data(), (size_t)nb * n));
                 for (int w = 2; w < SZ; w++)
                     mont.modmul_batch(tbl[w - 1], d_base_w, tbl[w]);
-                Data64 *d_table_w;
+                LimbT *d_table_w;
                 CU(cudaMalloc(&d_table_w, (size_t)SZ * total_bytes));
                 for (int w = 0; w < SZ; w++)
                     CU(cudaMemcpy(d_table_w + (size_t)w * nb * n, tbl[w], total_bytes, cudaMemcpyDeviceToDevice));
@@ -695,9 +695,9 @@ static void run_correctness_tests(BatchModCtx &mont,
                 Data64 *d_exp_w;
                 CU(cudaMalloc(&d_exp_w, total_bytes));
                 CU(cudaMemcpy(d_exp_w, exp32w_all.data(), total_bytes, cudaMemcpyHostToDevice));
-                Data64 *d_cur_w;
+                LimbT *d_cur_w;
                 CU(cudaMalloc(&d_cur_w, total_bytes));
-                CU(cudaMemcpy(d_win_acc, one_m2.data(), total_bytes, cudaMemcpyHostToDevice));
+                CU(limb_upload(d_win_acc, one_m2.data(), (size_t)nb * n));
                 const int thr = 256;
                 dim3 gsel((unsigned)(n + thr - 1) / thr, (unsigned)nb);
                 int n_win32 = (32 + K - 1) / K;

@@ -55,8 +55,8 @@ struct BatchModCtx
     Multiplier ntt; // multiplication backend (compile-time: MUL_ALG)
 
     // Per-candidate data, [n_batch * n_limbs]
-    Data64 *d_N = nullptr;
-    Data64 *d_Nprime = nullptr;
+    LimbT *d_N = nullptr;
+    LimbT *d_Nprime = nullptr;
 
     // Pre-computed NTT(N) and NTT(N'), [n_batch * padded] — read-only on the hot path
     Data64 *d_ntt_N = nullptr;
@@ -75,18 +75,18 @@ struct BatchModCtx
     // Barrett reduction scratch (disjoint lifetimes ⇒ reused):
     //   d_bar_w1   [n_batch * bar_W1] — A1 = T>>(k-1), then q̂, then residue r.
     //   d_bar_prod [n_batch * n_sum]  — intermediate product: A1·μ, then q̂·N.
-    Data64 *d_bar_w1 = nullptr;
-    Data64 *d_bar_prod = nullptr;
+    LimbT *d_bar_w1 = nullptr;
+    LimbT *d_bar_prod = nullptr;
 #endif
 
     // Reference values in working form — for checking without GMP.
     // Montgomery: to_mont(·). Barrett: plain residue (1 and N-1). [n_batch*n_limbs]
-    Data64 *d_one_res = nullptr; // working form of 1   per candidate
-    Data64 *d_Nm1_res = nullptr; // working form of N-1 per candidate
+    LimbT *d_one_res = nullptr; // working form of 1   per candidate
+    LimbT *d_Nm1_res = nullptr; // working form of N-1 per candidate
 
     // Working buffers
-    Data64 *d_T = nullptr; // [n_batch * n_sum]
-    Data64 *d_m = nullptr; // [n_batch * padded]  (NTT workspace for m, Montgomery only)
+    LimbT *d_T = nullptr; // [n_batch * n_sum]
+    LimbT *d_m = nullptr; // [n_batch * padded]  (NTT workspace for m, Montgomery only)
 
     // Tiled subtractor buffers (ops/sub) [n_batch * n_cs_tiles]
     int n_cs_tiles = 0;
@@ -142,23 +142,23 @@ struct BatchModCtx
                        std::vector<uint64_t> &out_all) const;
 
     // d_x (GPU, Montgomery form) -> normal values (host)
-    void from_residue_batch(const Data64 *d_x, std::vector<uint64_t> &out_all) const;
+    void from_residue_batch(const LimbT *d_x, std::vector<uint64_t> &out_all) const;
 
     // Checks results on the GPU: for each candidate, r_mont == 1_mont or (N-1)_mont?
     // d_passed[t] = 1 if passed, 0 if composite. n_total elements.
-    void check_passed(const Data64 *d_r_mont, uint8_t *d_passed, cudaStream_t s = 0) const;
+    void check_passed(const LimbT *d_r_mont, uint8_t *d_passed, cudaStream_t s = 0) const;
 
     // d_out = mont_mul(d_A, d_B) for all n_batch candidates
-    void modmul_batch(const Data64 *d_A, const Data64 *d_B, Data64 *d_out,
+    void modmul_batch(const LimbT *d_A, const LimbT *d_B, LimbT *d_out,
                         cudaStream_t s = 0);
     // d_out = mont_sq(d_A) for all n_batch candidates
-    void modsq_batch(const Data64 *d_A, Data64 *d_out, cudaStream_t s = 0);
+    void modsq_batch(const LimbT *d_A, LimbT *d_out, cudaStream_t s = 0);
 
     // Only NTT(A)*NTT(B) + INTT — no REDC. Measures the pure cost of multiplication.
-    void mul_no_redc_batch(const Data64 *d_A, const Data64 *d_B, Data64 *d_out,
+    void mul_no_redc_batch(const LimbT *d_A, const LimbT *d_B, LimbT *d_out,
                            cudaStream_t s = 0);
     // Only NTT(A)^2 + INTT — no REDC.
-    void sq_no_redc_batch(const Data64 *d_A, Data64 *d_out, cudaStream_t s = 0);
+    void sq_no_redc_batch(const LimbT *d_A, LimbT *d_out, cudaStream_t s = 0);
 
     BatchModCtx(const BatchModCtx &) = delete;
     BatchModCtx &operator=(const BatchModCtx &) = delete;
@@ -169,9 +169,9 @@ private:
     // Frees what precompute_reduction allocated.
     void free_reduction();
     // Reduces d_T (product in [n_batch*n_sum]) → d_out in working form.
-    void reduce_batch(Data64 *d_out, cudaStream_t s);
+    void reduce_batch(LimbT *d_out, cudaStream_t s);
     // Conditional subtraction mod N (Montgomery only; Barrett finalizes in its own kernel).
-    void cond_sub_batch(Data64 *d_x, cudaStream_t s);
+    void cond_sub_batch(LimbT *d_x, cudaStream_t s);
     // Synchronizes the last event of the ring and accumulates all pending times.
     void perf_flush(cudaStream_t s);
     // Builds the subtree of one path (mul/sq) under perf_root and returns the root branch.

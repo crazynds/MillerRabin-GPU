@@ -213,7 +213,7 @@ static BenchResult bench_gpu_mul_only(int n_bits, bool is_last)
         BatchModCtx ctx(nums, 0);
         size_t nb = (size_t)N_BATCH * ctx.n_limbs * sizeof(Data64);
         size_t nb_out = (size_t)N_BATCH * ctx.n_sum * sizeof(Data64);
-        Data64 *d_A, *d_B, *d_out;
+        LimbT *d_A, *d_B, *d_out;
         cudaMalloc(&d_A, nb);
         cudaMalloc(&d_B, nb);
         cudaMalloc(&d_out, nb_out);
@@ -258,7 +258,7 @@ static BenchResult bench_gpu_sq_only(int n_bits, bool is_last)
         BatchModCtx ctx(nums, 0);
         size_t nb = (size_t)N_BATCH * ctx.n_limbs * sizeof(Data64);
         size_t nb_out = (size_t)N_BATCH * ctx.n_sum * sizeof(Data64);
-        Data64 *d_A, *d_out;
+        LimbT *d_A, *d_out;
         cudaMalloc(&d_A, nb);
         cudaMalloc(&d_out, nb_out);
         cudaMemcpy(d_A, ctx.d_one_res, nb, cudaMemcpyDeviceToDevice);
@@ -300,7 +300,7 @@ static BenchResult bench_gpu_mul(int n_bits, bool is_last)
         BatchModCtx ctx(nums, 0);
 
         size_t nb = (size_t)N_BATCH * ctx.n_limbs * sizeof(Data64);
-        Data64 *d_A, *d_B, *d_out;
+        LimbT *d_A, *d_B, *d_out;
         cudaMalloc(&d_A, nb);
         cudaMalloc(&d_B, nb);
         cudaMalloc(&d_out, nb);
@@ -346,7 +346,7 @@ static BenchResult bench_gpu_sq(int n_bits, bool is_last)
         BatchModCtx ctx(nums, 0);
 
         size_t nb = (size_t)N_BATCH * ctx.n_limbs * sizeof(Data64);
-        Data64 *d_A, *d_out;
+        LimbT *d_A, *d_out;
         cudaMalloc(&d_A, nb);
         cudaMalloc(&d_out, nb);
         cudaMemcpy(d_A, ctx.d_one_res, nb, cudaMemcpyDeviceToDevice);

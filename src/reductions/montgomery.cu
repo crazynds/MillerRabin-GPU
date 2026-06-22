@@ -89,7 +89,7 @@ void BatchModCtx::precompute_reduction(const std::vector<uint64_t> &N_all)
     std::vector<uint64_t> Np_all((size_t)n_batch * n_limbs, 0);
     for (int i = 0; i < n_batch; i++)
         compute_Nprime(Np_all.data() + (size_t)i * n_limbs, N_all.data() + (size_t)i * n_limbs, n_limbs);
-    CU(cudaMemcpy(d_Nprime, Np_all.data(), nb, cudaMemcpyHostToDevice));
+    CU(limb_upload(d_Nprime, Np_all.data(), (size_t)n_batch * n_limbs));
     ntt.ntt_A(d_Nprime, n_limbs);
     CU(cudaMemcpy(d_ntt_Nprime, ntt.d_buf_A, pb, cudaMemcpyDeviceToDevice));
 }
@@ -106,7 +106,7 @@ void BatchModCtx::free_reduction()
 // ── reduction ─────────────────────────────────────────────────────────────────
 
 // Final conditional subtraction of the REDC: if x >= N, x -= N.
-void BatchModCtx::cond_sub_batch(Data64 *d_x, cudaStream_t s)
+void BatchModCtx::cond_sub_batch(LimbT *d_x, cudaStream_t s)
 {
     ops::sub_phase1(d_x, n_limbs, d_N, n_limbs, nullptr, n_limbs,
                     d_cs_tile_cmp, d_cs_tile_bstate, n_batch, s);
@@ -116,7 +116,7 @@ void BatchModCtx::cond_sub_batch(Data64 *d_x, cudaStream_t s)
 
 // Montgomery reduction (REDC): given T = A·B in d_T [n_batch * n_sum],
 // computes out = T · R^{-1} mod N for each candidate.
-void BatchModCtx::reduce_batch(Data64 *d_out, cudaStream_t s)
+void BatchModCtx::reduce_batch(LimbT *d_out, cudaStream_t s)
 {
     const int thr = MR_THR_REDUCE;
 
@@ -127,7 +127,7 @@ void BatchModCtx::reduce_batch(Data64 *d_out, cudaStream_t s)
 
     // Step 1: m = (T mod R) · N' mod R. T_low = first n_limbs limbs of T.
     TSTART();
-    ops::extract_low(ntt.d_buf_A, d_T, n_limbs, padded, n_sum, n_batch, thr, s);
+    ops::extract_low(reinterpret_cast<LimbT *>(ntt.d_buf_A), d_T, n_limbs, padded, n_sum, n_batch, thr, s);
     ntt.fwd_A(s);
     TSTOP(mul->child(MONTM_NTT_TLOW));
 

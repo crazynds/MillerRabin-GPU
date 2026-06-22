@@ -110,9 +110,9 @@ void BatchModCtx::precompute_reduction(const std::vector<uint64_t> &N_all)
     for (int i = 0; i < n_batch; i++)
         compute_barrett_mu(mu_all.data() + (size_t)i * bar_W1,
                            N_all.data() + (size_t)i * n_limbs, bar_k_all[i]);
-    Data64 *d_mu_tmp = nullptr;
+    LimbT *d_mu_tmp = nullptr;
     CU(cudaMalloc(&d_mu_tmp, w1b));
-    CU(cudaMemcpy(d_mu_tmp, mu_all.data(), w1b, cudaMemcpyHostToDevice));
+    CU(limb_upload(d_mu_tmp, mu_all.data(), (size_t)n_batch * bar_W1));
     ntt.ntt_A(d_mu_tmp, bar_W1);
     CU(cudaMemcpy(d_ntt_mu, ntt.d_buf_A, pb, cudaMemcpyDeviceToDevice));
     CU(cudaFree(d_mu_tmp));
@@ -135,14 +135,14 @@ void BatchModCtx::free_reduction()
 
 // cond_sub_batch is not used in Barrett (finalize does the subtraction), but the
 // function is declared in the header; we provide an empty definition to satisfy the linker.
-void BatchModCtx::cond_sub_batch(Data64 *, cudaStream_t) {}
+void BatchModCtx::cond_sub_batch(LimbT *, cudaStream_t) {}
 
 // ── reduction ─────────────────────────────────────────────────────────────────
 
 // Barrett reduction: out = T mod N, with T = A·B in d_T [n_batch*n_sum].
 //   q̂ = floor( floor(T/b^{k-1})·μ / b^{k+1} )   (q̂ ∈ {q, q-1, q-2}), k = bar_k[i].
 //   out = T − q̂·N, with up to 2 final subtractions of N.
-void BatchModCtx::reduce_batch(Data64 *d_out, cudaStream_t s)
+void BatchModCtx::reduce_batch(LimbT *d_out, cudaStream_t s)
 {
     const int thr = MR_THR_REDUCE;
     const int W1 = bar_W1;

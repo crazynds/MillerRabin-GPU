@@ -43,6 +43,8 @@ inline int next_pow2_ntt(int n)
 }
 #endif
 
+#include "ops/limb_storage.cuh" // LimbT (needs Data64)
+
 struct Ntt4StepBatch
 {
     int n_limbs, padded, logn, n_batch;
@@ -74,6 +76,9 @@ struct Ntt4StepBatch
     explicit Ntt4StepBatch(int n_limbs_, int n_batch_);
     ~Ntt4StepBatch();
 
+    // Buffer holding the raw INTT coefficients the carry layer reads (= d_buf_A here).
+    LimbT *raw_coeffs() { return reinterpret_cast<LimbT *>(d_buf_A); }
+
     // ── Forward transforms ────────────────────────────────────────────────────
     void ntt_A(const Data64 *d_src, int n_src, cudaStream_t s = 0);
     void ntt_B(const Data64 *d_src, int n_src, cudaStream_t s = 0);
@@ -98,11 +103,11 @@ struct Ntt4StepBatch
     void schoolbook_sq(const Data64 *d_A, int n_src, cudaStream_t s = 0);
 
     // ── Carry / add (defined in ops/carry/carry_norm.cu, backend-agnostic) ──────
-    void carry_to_limbs(Data64 *d_out, int n_out, cudaStream_t s = 0);
-    void add_and_carry(Data64 *d_a, const Data64 *d_b, int n, int n_passes, cudaStream_t s = 0);
-    void vadd_raw_buf(Data64 *d_dst, int n_dst, cudaStream_t s = 0);
-    void carry_after_vadd(Data64 *d_dst, int n_dst, cudaStream_t s = 0);
-    void add_raw_buf_and_carry(Data64 *d_dst, int n_dst, cudaStream_t s = 0);
+    void carry_to_limbs(LimbT *d_out, int n_out, cudaStream_t s = 0);
+    void add_and_carry(LimbT *d_a, const LimbT *d_b, int n, int n_passes, cudaStream_t s = 0);
+    void vadd_raw_buf(LimbT *d_dst, int n_dst, cudaStream_t s = 0);
+    void carry_after_vadd(LimbT *d_dst, int n_dst, cudaStream_t s = 0);
+    void add_raw_buf_and_carry(LimbT *d_dst, int n_dst, cudaStream_t s = 0);
 
     Ntt4StepBatch(const Ntt4StepBatch &) = delete;
     Ntt4StepBatch &operator=(const Ntt4StepBatch &) = delete;

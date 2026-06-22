@@ -15,14 +15,15 @@ namespace
     }
 
     // Phase 1: per tile, comparison a vs b and the tile's borrow G/P/K state.
+    template <typename T>
     __global__ void sub_phase1_k(
-        const Data64 *__restrict__ a, int sa,
-        const Data64 *__restrict__ b, int sb,
+        const T *__restrict__ a, int sa,
+        const T *__restrict__ b, int sb,
         const int *__restrict__ bk, int W,
         int *__restrict__ tile_cmp, int *__restrict__ tile_bstate, int n_batch)
     {
-        __shared__ Data64 s_a[CS_TILE];
-        __shared__ Data64 s_b[CS_TILE];
+        __shared__ uint64_t s_a[CS_TILE];
+        __shared__ uint64_t s_b[CS_TILE];
         __shared__ int s_reduce[CS_TILE];
         __shared__ int s_state[CS_TILE];
 
@@ -33,8 +34,8 @@ namespace
             return;
 
         int bw = bk ? bk[cand] : W;
-        s_a[tid] = (j < W) ? a[(size_t)cand * sa + j] : 0ULL;
-        s_b[tid] = (j < W && j < bw) ? b[(size_t)cand * sb + j] : 0ULL;
+        s_a[tid] = (j < W) ? limb_ld(a[(size_t)cand * sa + j]) : 0ULL;
+        s_b[tid] = (j < W && j < bw) ? limb_ld(b[(size_t)cand * sb + j]) : 0ULL;
         __syncthreads();
 
         int enc = 1;
@@ -69,16 +70,17 @@ namespace
     }
 
     // Phase 2 (fused with resolve): resolves the tile's borrow_in and applies out = a − b.
+    template <typename T>
     __global__ void sub_apply_k(
-        Data64 *__restrict__ out, int so,
-        const Data64 *__restrict__ a, int sa,
-        const Data64 *__restrict__ b, int sb,
+        T *__restrict__ out, int so,
+        const T *__restrict__ a, int sa,
+        const T *__restrict__ b, int sb,
         const int *__restrict__ bk, int W,
         const int *__restrict__ tile_cmp, const int *__restrict__ tile_bstate,
         int uncond, int n_batch)
     {
-        __shared__ Data64 s_a[CS_TILE];
-        __shared__ Data64 s_b[CS_TILE];
+        __shared__ uint64_t s_a[CS_TILE];
+        __shared__ uint64_t s_b[CS_TILE];
         __shared__ int s_state[CS_TILE];
         __shared__ int s_tile_bin;
 
@@ -118,8 +120,8 @@ namespace
             return; // a < b: no-op (out already contains a in the in-place case)
 
         int bw = bk ? bk[cand] : W;
-        s_a[tid] = (j < W) ? a[(size_t)cand * sa + j] : 0ULL;
-        s_b[tid] = (j < W && j < bw) ? b[(size_t)cand * sb + j] : 0ULL;
+        s_a[tid] = (j < W) ? limb_ld(a[(size_t)cand * sa + j]) : 0ULL;
+        s_b[tid] = (j < W && j < bw) ? limb_ld(b[(size_t)cand * sb + j]) : 0ULL;
         __syncthreads();
 
         int bw0 = (j < W && s_a[tid] < s_b[tid]) ? 1 : 0;
@@ -140,18 +142,19 @@ namespace
         if (j < W)
         {
             int64_t d = (int64_t)s_a[tid] - (int64_t)s_b[tid] - bin;
-            out[(size_t)cand * so + j] = (Data64)((d < 0) ? d + (1LL << LIMB_BITS) : d);
+            limb_st(out[(size_t)cand * so + j], (uint64_t)((d < 0) ? d + (1LL << LIMB_BITS) : d));
         }
     }
 
-    __global__ void copy_low_k(Data64 *__restrict__ out, const Data64 *__restrict__ r,
+    template <typename T>
+    __global__ void copy_low_k(T *__restrict__ out, const T *__restrict__ r,
                                int out_limbs, int W, int n_batch)
     {
         int cand = blockIdx.y;
         int j = blockIdx.x * blockDim.x + threadIdx.x;
         if (cand >= n_batch || j >= out_limbs)
             return;
-        out[(size_t)cand * out_limbs + j] = (j < W) ? r[(size_t)cand * W + j] : 0ULL;
+        out[(size_t)cand * out_limbs + j] = (j < W) ? r[(size_t)cand * W + j] : (T)0;
     }
 }
 
@@ -159,27 +162,27 @@ namespace ops
 {
     int sub_n_tiles(int W) { return (W + CS_TILE - 1) / CS_TILE; }
 
-    void sub_phase1(const Data64 *a, int sa, const Data64 *b, int sb,
+    void sub_phase1(const LimbT *a, int sa, const LimbT *b, int sb,
                     const int *bk, int W, int *tile_cmp, int *tile_bstate,
                     int n_batch, cudaStream_t s)
     {
         dim3 g((unsigned)sub_n_tiles(W), (unsigned)n_batch);
-        sub_phase1_k<<<g, CS_TILE, 0, s>>>(a, sa, b, sb, bk, W, tile_cmp, tile_bstate, n_batch);
+        sub_phase1_k<LimbT><<<g, CS_TILE, 0, s>>>(a, sa, b, sb, bk, W, tile_cmp, tile_bstate, n_batch);
     }
 
-    void sub_apply(Data64 *out, int so, const Data64 *a, int sa, const Data64 *b, int sb,
+    void sub_apply(LimbT *out, int so, const LimbT *a, int sa, const LimbT *b, int sb,
                    const int *bk, int W, const int *tile_cmp, const int *tile_bstate,
                    int uncond, int n_batch, cudaStream_t s)
     {
         dim3 g((unsigned)sub_n_tiles(W), (unsigned)n_batch);
-        sub_apply_k<<<g, CS_TILE, 0, s>>>(out, so, a, sa, b, sb, bk, W,
-                                          tile_cmp, tile_bstate, uncond, n_batch);
+        sub_apply_k<LimbT><<<g, CS_TILE, 0, s>>>(out, so, a, sa, b, sb, bk, W,
+                                                 tile_cmp, tile_bstate, uncond, n_batch);
     }
 
-    void copy_low(Data64 *out, const Data64 *r, int out_limbs, int W,
+    void copy_low(LimbT *out, const LimbT *r, int out_limbs, int W,
                   int n_batch, int thr, cudaStream_t s)
     {
         dim3 g((unsigned)(out_limbs + thr - 1) / thr, (unsigned)n_batch);
-        copy_low_k<<<g, thr, 0, s>>>(out, r, out_limbs, W, n_batch);
+        copy_low_k<LimbT><<<g, thr, 0, s>>>(out, r, out_limbs, W, n_batch);
     }
 }

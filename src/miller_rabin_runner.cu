@@ -20,9 +20,9 @@ using hrc = std::chrono::high_resolution_clock;
 // Extracts k bits [msb_pos .. msb_pos-k+1] from the exponent and copies d_table[w * ...].
 
 __global__ void select_window_kernel(
-        Data64* __restrict__       d_out,
-        const Data64* __restrict__ d_table,
-        const Data64* __restrict__ d_exp,
+        LimbT* __restrict__        d_out,
+        const LimbT* __restrict__  d_table,
+        const Data64* __restrict__ d_exp, // exponent: bit-addressed, never transformed → stays Data64
         int msb_pos, int k,
         int n_limbs, int n_total)
 {
@@ -49,8 +49,8 @@ __global__ void select_window_kernel(
 // If equal and alive[t]==1, sets alive[t]=2 (passed via N-1).
 
 __global__ static void check_equals_kernel(
-        const Data64* __restrict__ d_r,
-        const Data64* __restrict__ d_ref,
+        const LimbT* __restrict__ d_r,
+        const LimbT* __restrict__ d_ref,
         uint8_t* __restrict__      d_alive,
         int n_limbs, int n_total)
 {
@@ -61,8 +61,8 @@ __global__ static void check_equals_kernel(
     if (threadIdx.x == 0) match = 1;
     __syncthreads();
 
-    const Data64* rv = d_r   + (size_t)t * n_limbs;
-    const Data64* ref = d_ref + (size_t)t * n_limbs;
+    const LimbT* rv = d_r   + (size_t)t * n_limbs;
+    const LimbT* ref = d_ref + (size_t)t * n_limbs;
     for (int j = (int)threadIdx.x; j < n_limbs; j += (int)blockDim.x)
         if (rv[j] != ref[j]) atomicAnd(&match, 0);
     __syncthreads();
@@ -89,11 +89,11 @@ struct PerfCtrs {
 static void window_exp_loop(
         BatchModCtx& mont,
         const std::vector<uint64_t>& exp_all,
-        Data64*& d_r,
-        Data64* d_one_res_h,
-        Data64* d_base,
-        Data64*& d_scratch,
-        Data64* d_cur_mul,
+        LimbT*& d_r,
+        LimbT* d_one_res_h,
+        LimbT* d_base,
+        LimbT*& d_scratch,
+        LimbT* d_cur_mul,
         Data64* d_exp_dev,
         int n_total,
         PerfCtrs& perf,
@@ -101,10 +101,10 @@ static void window_exp_loop(
         bool show_progress)
 {
     int n = mont.n_limbs;
-    size_t total_bytes = (size_t)n_total * n * sizeof(Data64);
+    size_t total_bytes = (size_t)n_total * n * sizeof(LimbT);
 
     // Pre-computes table: table[0]=1, table[1]=base, ..., table[WINDOW_SIZE-1]=base^(WINDOW_SIZE-1)
-    Data64* d_table;
+    LimbT* d_table;
     CU(cudaMalloc(&d_table, (size_t)WINDOW_SIZE * total_bytes));
 
     cudaEvent_t ev0, ev1;
@@ -242,7 +242,8 @@ static void print_perf(const PerfCtrs& perf, BatchModCtx& mont)
 // ── Allocates working buffers for the witnesses ───────────────────────────────
 
 struct WitnessBuffers {
-    Data64 *d_r, *d_base, *d_scratch, *d_one, *d_cur_mul, *d_exp_dev;
+    LimbT  *d_r, *d_base, *d_scratch, *d_one, *d_cur_mul;
+    Data64 *d_exp_dev; // exponent: bit-addressed, never transformed → stays Data64
     uint8_t* d_passed;
     int n_total, n;
 
@@ -250,22 +251,24 @@ struct WitnessBuffers {
                    int n_total_)
         : n_total(n_total_), n(mont.n_limbs)
     {
-        size_t tb = (size_t)n_total * n * sizeof(Data64);
+        size_t count = (size_t)n_total * n;
+        size_t tb  = count * sizeof(LimbT);
+        size_t eb  = count * sizeof(Data64);
         CU(cudaMalloc(&d_r,       tb));
         CU(cudaMalloc(&d_base,    tb));
         CU(cudaMalloc(&d_scratch, tb));
         CU(cudaMalloc(&d_one,     tb));
         CU(cudaMalloc(&d_cur_mul, tb));
-        CU(cudaMalloc(&d_exp_dev, tb));
+        CU(cudaMalloc(&d_exp_dev, eb));
         CU(cudaMalloc(&d_passed,  (size_t)n_total));
-        CU(cudaMemcpy(d_exp_dev, exp_all.data(), tb, cudaMemcpyHostToDevice));
+        CU(cudaMemcpy(d_exp_dev, exp_all.data(), eb, cudaMemcpyHostToDevice));
 
         // 1 in Montgomery form
-        std::vector<uint64_t> one_all((size_t)n_total * n, 0);
+        std::vector<uint64_t> one_all(count, 0);
         for (int t = 0; t < n_total; t++) one_all[t*n] = 1;
         std::vector<uint64_t> one_mont;
         mont.to_residue_batch(one_all, one_mont);
-        CU(cudaMemcpy(d_one, one_mont.data(), tb, cudaMemcpyHostToDevice));
+        CU(limb_upload(d_one, one_mont.data(), count));
     }
 
     ~WitnessBuffers() {
@@ -289,7 +292,7 @@ std::vector<bool> gpu_miller_rabin_s1(
         bool show_progress)
 {
     int n = mont.n_limbs;
-    size_t total_bytes = (size_t)n_total * n * sizeof(Data64);
+    size_t total_bytes = (size_t)n_total * n * sizeof(LimbT);
     WitnessBuffers buf(mont, exp_all, n_total);
 
     std::vector<uint8_t> passed_h(n_total);
@@ -326,7 +329,7 @@ std::vector<bool> gpu_miller_rabin_s1(
 
         // Memcpy setup: base → GPU, 1_mont → d_r
         CU(cudaEventRecord(ev0));
-        CU(cudaMemcpy(buf.d_base, base_mont.data(), total_bytes, cudaMemcpyHostToDevice));
+        CU(limb_upload(buf.d_base, base_mont.data(), (size_t)n_total * n));
         CU(cudaMemcpy(buf.d_r,    buf.d_one,        total_bytes, cudaMemcpyDeviceToDevice));
         CU(cudaEventRecord(ev1));
         perf.memcpy_ms    += elapsed_ms();
@@ -377,7 +380,7 @@ std::vector<bool> gpu_miller_rabin(
     if (s == 1) return gpu_miller_rabin_s1(mont, exp_all, Nm1_all, n_total, witnesses, label, show_report, show_progress);
 
     int n = mont.n_limbs;
-    size_t total_bytes = (size_t)n_total * n * sizeof(Data64);
+    size_t total_bytes = (size_t)n_total * n * sizeof(LimbT);
     WitnessBuffers buf(mont, exp_all, n_total);
 
     mont.perf_enabled = show_report;
@@ -419,7 +422,7 @@ std::vector<bool> gpu_miller_rabin(
 
         // Memcpy setup: base → GPU, d_r init, alive → GPU
         CU(cudaEventRecord(ev0));
-        CU(cudaMemcpy(buf.d_base, base_mont.data(), total_bytes, cudaMemcpyHostToDevice));
+        CU(limb_upload(buf.d_base, base_mont.data(), (size_t)n_total * n));
         CU(cudaMemcpy(buf.d_r,    buf.d_one,        total_bytes, cudaMemcpyDeviceToDevice));
         CU(cudaMemcpy(d_alive,    alive_h.data(),   n_total,     cudaMemcpyHostToDevice));
         CU(cudaEventRecord(ev1));

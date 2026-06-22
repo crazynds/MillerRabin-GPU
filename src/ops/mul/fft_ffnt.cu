@@ -17,7 +17,9 @@ static constexpr int CARRY_TILE = MR_CARRY_TILE;
 
 // ── kernels ─────────────────────────────────────────────────────────────────
 
-__global__ static void load_real(double *__restrict__ dst, const Data64 *__restrict__ src,
+// Real input now: limbs are stored as double (LimbT). Load with zero-padding into
+// the contiguous FFNT real buffer — a plain double→double copy (no int conversion).
+__global__ static void load_real(double *__restrict__ dst, const LimbT *__restrict__ src,
                                  int n_src, int n, int n_batch)
 {
     int cand = blockIdx.y;
@@ -26,23 +28,15 @@ __global__ static void load_real(double *__restrict__ dst, const Data64 *__restr
     dst[(size_t)cand * n + j] = (j < n_src) ? (double)src[(size_t)cand * n_src + j] : 0.0;
 }
 
-__global__ static void int2real(double *__restrict__ dst, const Data64 *__restrict__ buf,
-                                int n, int padded, int n_batch)
+// Copy an already-real-valued d_buf_A (stride=padded, filled by extract_low in double)
+// into the contiguous FFNT real buffer (stride=n). Pure double→double copy.
+__global__ static void real2real(double *__restrict__ dst, const double *__restrict__ buf,
+                                 int n, int padded, int n_batch)
 {
     int cand = blockIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (cand >= n_batch || j >= n) return;
-    dst[(size_t)cand * n + j] = (double)buf[(size_t)cand * padded + j];
-}
-
-__global__ static void round_scatter(Data64 *__restrict__ d_buf_A, const double *__restrict__ d_real,
-                                     int n, int padded, int n_batch)
-{
-    int cand = blockIdx.y;
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (cand >= n_batch || j >= n) return;
-    long long v = llround(d_real[(size_t)cand * n + j]);
-    d_buf_A[(size_t)cand * padded + j] = (Data64)(v < 0 ? 0 : v);
+    dst[(size_t)cand * n + j] = buf[(size_t)cand * padded + j];
 }
 
 __global__ static void cmul_kernel(Complex64 *__restrict__ a, const Complex64 *__restrict__ b, int total)
@@ -59,44 +53,43 @@ __global__ static void csq_kernel(Complex64 *__restrict__ a, int total)
     a[i] = a[i] * a[i];
 }
 
-__global__ static void schoolbook_mul_kernel(Data64 *__restrict__ d_buf_A, const Data64 *__restrict__ d_A,
-                                             const Data64 *__restrict__ d_B, int n_limbs, int n, int padded, int n_batch)
+// NOTE: schoolbook is only used by MUL_SCHOOLBOOK (never by the FFNT path), but its
+// signature must match the LimbT contract. It writes into the raw-coefficient buffer
+// (raw_coeffs() == d_real) so a subsequent carry_to_limbs would see the result.
+__global__ static void schoolbook_mul_kernel(double *__restrict__ out_raw, const LimbT *__restrict__ d_A,
+                                             const LimbT *__restrict__ d_B, int n_limbs, int n, int padded, int n_batch)
 {
     int cand = blockIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (cand >= n_batch || j >= n) return;
-    Data64 out = 0;
+    uint64_t acc = 0;
     if (j < 2 * n_limbs)
     {
-        const Data64 *A = d_A + (size_t)cand * n_limbs, *B = d_B + (size_t)cand * n_limbs;
-        uint64_t acc = 0;
+        const LimbT *A = d_A + (size_t)cand * n_limbs, *B = d_B + (size_t)cand * n_limbs;
         int i_lo = (j >= n_limbs) ? j - n_limbs + 1 : 0;
         int i_hi = (j < n_limbs) ? j + 1 : n_limbs;
-        for (int i = i_lo; i < i_hi; i++) acc += A[i] * B[j - i];
-        out = acc;
+        for (int i = i_lo; i < i_hi; i++) acc += limb_ld(A[i]) * limb_ld(B[j - i]);
     }
-    d_buf_A[(size_t)cand * padded + j] = out;
+    out_raw[(size_t)cand * padded + j] = (double)acc;
 }
 
-__global__ static void schoolbook_sq_kernel(Data64 *__restrict__ d_buf_A, const Data64 *__restrict__ d_A,
+__global__ static void schoolbook_sq_kernel(double *__restrict__ out_raw, const LimbT *__restrict__ d_A,
                                             int n_limbs, int n, int padded, int n_batch)
 {
     int cand = blockIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (cand >= n_batch || j >= n) return;
-    Data64 out = 0;
+    uint64_t acc = 0;
     if (j < 2 * n_limbs)
     {
-        const Data64 *A = d_A + (size_t)cand * n_limbs;
-        uint64_t acc = 0;
+        const LimbT *A = d_A + (size_t)cand * n_limbs;
         int i_lo = (j >= n_limbs) ? j - n_limbs + 1 : 0;
         int i_hi_excl = (j < n_limbs) ? j + 1 : n_limbs;
         int i_cross = (j + 1) / 2;
-        for (int i = i_lo; i < i_cross && i < i_hi_excl; i++) acc += 2ULL * A[i] * A[j - i];
-        if (j % 2 == 0) { int m = j / 2; if (m >= i_lo && m < i_hi_excl) acc += A[m] * A[m]; }
-        out = acc;
+        for (int i = i_lo; i < i_cross && i < i_hi_excl; i++) acc += 2ULL * limb_ld(A[i]) * limb_ld(A[j - i]);
+        if (j % 2 == 0) { int m = j / 2; if (m >= i_lo && m < i_hi_excl) acc += limb_ld(A[m]) * limb_ld(A[m]); }
     }
-    d_buf_A[(size_t)cand * padded + j] = out;
+    out_raw[(size_t)cand * padded + j] = (double)acc;
 }
 
 // ── ctor / dtor ───────────────────────────────────────────────────────────────
@@ -180,7 +173,7 @@ void FftFFNTBatch::run_ffnt(double *rbuf, Data64 *tbuf, bool fwd, int batch, cud
              fwd ? d_twist : d_untwist, fwd ? d_root_fwd : d_root_inv, cfg, batch, false);
 }
 
-void FftFFNTBatch::ntt_A(const Data64 *d_src, int n_src, cudaStream_t s)
+void FftFFNTBatch::ntt_A(const LimbT *d_src, int n_src, cudaStream_t s)
 {
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
@@ -188,7 +181,7 @@ void FftFFNTBatch::ntt_A(const Data64 *d_src, int n_src, cudaStream_t s)
     run_ffnt(d_real, d_buf_A, /*fwd=*/true, n_batch, s);
 }
 
-void FftFFNTBatch::ntt_B(const Data64 *d_src, int n_src, cudaStream_t s)
+void FftFFNTBatch::ntt_B(const LimbT *d_src, int n_src, cudaStream_t s)
 {
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
@@ -197,7 +190,7 @@ void FftFFNTBatch::ntt_B(const Data64 *d_src, int n_src, cudaStream_t s)
     run_ffnt(rB, d_buf_B, /*fwd=*/true, n_batch, s);
 }
 
-void FftFFNTBatch::ntt_AB(const Data64 *d_srcA, const Data64 *d_srcB, int n_src, cudaStream_t s)
+void FftFFNTBatch::ntt_AB(const LimbT *d_srcA, const LimbT *d_srcB, int n_src, cudaStream_t s)
 {
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
@@ -211,7 +204,8 @@ void FftFFNTBatch::fwd_A(cudaStream_t s)
 {
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
-    int2real<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_real, d_buf_A, fft_len, padded, n_batch);
+    real2real<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
+        d_real, reinterpret_cast<const double *>(d_buf_A), fft_len, padded, n_batch);
     run_ffnt(d_real, d_buf_A, /*fwd=*/true, n_batch, s);
 }
 
@@ -235,24 +229,27 @@ void FftFFNTBatch::pmul_ext(const Data64 *d_ext, cudaStream_t s)
 
 void FftFFNTBatch::intt_A(cudaStream_t s)
 {
+    // Inverse FFNT leaves the (un-normalized, scaled) real coefficients in d_real,
+    // which IS raw_coeffs() — the carry layer reads them directly as double.
+    // No round_scatter: the double→int rounding/clamp now happens inside limb_ld
+    // at the carry boundary (exact, since coefficients are < 2^52).
     run_ffnt(d_real, d_buf_A, /*fwd=*/false, n_batch, s);
-    constexpr int thr = MR_THR_LOAD;
-    unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
-    round_scatter<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_buf_A, d_real, fft_len, padded, n_batch);
 }
 
 void FftFFNTBatch::pmul_and_intt(cudaStream_t s) { pmul(s); intt_A(s); }
 void FftFFNTBatch::psq_and_intt(cudaStream_t s) { psq(s); intt_A(s); }
 void FftFFNTBatch::pmul_ext_and_intt(const Data64 *d_ext, cudaStream_t s) { pmul_ext(d_ext, s); intt_A(s); }
 
-void FftFFNTBatch::schoolbook_mul(const Data64 *d_A, const Data64 *d_B, int n_src, cudaStream_t s)
+void FftFFNTBatch::schoolbook_mul(const LimbT *d_A, const LimbT *d_B, int n_src, cudaStream_t s)
 {
     constexpr int thr = MR_THR_PMUL; unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
-    schoolbook_mul_kernel<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_buf_A, d_A, d_B, n_src, fft_len, padded, n_batch);
+    schoolbook_mul_kernel<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
+        reinterpret_cast<double *>(d_real), d_A, d_B, n_src, fft_len, padded, n_batch);
 }
 
-void FftFFNTBatch::schoolbook_sq(const Data64 *d_A, int n_src, cudaStream_t s)
+void FftFFNTBatch::schoolbook_sq(const LimbT *d_A, int n_src, cudaStream_t s)
 {
     constexpr int thr = MR_THR_PMUL; unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
-    schoolbook_sq_kernel<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_buf_A, d_A, n_src, fft_len, padded, n_batch);
+    schoolbook_sq_kernel<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
+        reinterpret_cast<double *>(d_real), d_A, n_src, fft_len, padded, n_batch);
 }
