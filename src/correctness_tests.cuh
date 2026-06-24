@@ -761,10 +761,10 @@ static void run_correctness_tests(BatchModCtx &mont,
 
 static void run_correctness_tests()
 {
-    // Generate 4 random odd numbers of ~8000 decimal digits each.
+    // Generate 4 random odd numbers of ~18000 decimal digits each.
     // Odd ensures N-1 is even (required for Miller-Rabin decomposition).
-    constexpr int NB = 64;
-    constexpr int TARGET_DIGITS = 8000;
+    constexpr int NB = 512;
+    constexpr int TARGET_DIGITS = 18000;
     constexpr int TARGET_BITS = (int)(TARGET_DIGITS / 0.30103) + 1;
 
     int n_limbs = limbs_for_digits(TARGET_DIGITS + 4);
@@ -774,14 +774,17 @@ static void run_correctness_tests()
     // Seed from /dev/urandom so each run produces different numbers.
     unsigned long seed = 0;
     FILE *urandom = fopen("/dev/urandom", "rb");
-    if (urandom) {
-        if (fread(&seed, sizeof(seed), 1, urandom) != 1) seed = (unsigned long)time(nullptr);
+    if (urandom)
+    {
+        if (fread(&seed, sizeof(seed), 1, urandom) != 1)
+            seed = (unsigned long)time(nullptr);
         fclose(urandom);
     }
     gmp_randseed_ui(rng, seed);
 
     std::vector<NumberCandidate> cands(NB);
-    for (int i = 0; i < NB; i++) {
+    for (int i = 0; i < NB; i++)
+    {
         mpz_t N;
         mpz_init(N);
         mpz_urandomb(N, rng, TARGET_BITS);
@@ -793,7 +796,8 @@ static void run_correctness_tests()
     gmp_randclear(rng);
 
     std::vector<NumberCandidate *> ptrs(NB);
-    for (int i = 0; i < NB; i++) ptrs[i] = &cands[i];
+    for (int i = 0; i < NB; i++)
+        ptrs[i] = &cands[i];
 
     std::vector<uint64_t> N_all, Nm1_all, d_all;
     pack_batch(ptrs, n_limbs, N_all, Nm1_all, d_all);

@@ -127,15 +127,6 @@ These control the number of CUDA threads per block for specific kernels. All
 values must be **multiples of 32** (the GPU warp size). Changing them rarely
 helps without profiling; the defaults work well across most GPUs.
 
-| Parameter           | Kernel                                                          | Default |
-| ------------------- | --------------------------------------------------------------- | ------- |
-| `MR_THR_LOAD`       | `load_padded_batch` — copies & zero-pads input limbs            | 256     |
-| `MR_THR_PMUL`       | `pmul_batch` / `psq_batch` — pointwise NTT-domain multiply      | 256     |
-| `MR_THR_REDUCE`     | `extract_low` / `shift_right` — Montgomery REDC step            | 256     |
-| `MR_THR_SELECT_WIN` | `select_window_kernel` — reads exponent window power table      | 256     |
-| `MR_THR_CHECK`      | `check_passed_kernel` / `check_equals_kernel` — MR result check | 256     |
-| `MR_THR_COPY`       | `bar_copy_out` (Barrett) — copies final residue to output       | 128     |
-
 ## Subtraction
 
 ### `MR_SUB_TILE` (default: `256`)

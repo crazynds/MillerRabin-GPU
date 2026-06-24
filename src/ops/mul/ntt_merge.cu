@@ -2,6 +2,7 @@
 #include "config.h"
 #include "ops/mul/ntt_merge.cuh"
 #include "ops/mul/ntt_check.cuh"
+#include "lib/gpuntt/ntt_merge_intt_fused.cuh"
 #include <stdexcept>
 #include <string>
 
@@ -169,20 +170,32 @@ void BigIntNTTBatch::intt_A(cudaStream_t s)
 
 void BigIntNTTBatch::pmul_and_intt(cudaStream_t s)
 {
+#ifdef MR_NTT_FUSED_PMUL
+    GPU_INTT_Inplace_PreMul(d_buf_A, d_buf_B, d_inv_table, modulus, make_cfg(INVERSE, s), n_batch);
+#else
     pmul(s);
     intt_A(s);
+#endif
 }
 
 void BigIntNTTBatch::pmul_ext_and_intt(const Data64 *d_ext, cudaStream_t s)
 {
+#ifdef MR_NTT_FUSED_PMUL
+    GPU_INTT_Inplace_PreMul(d_buf_A, d_ext, d_inv_table, modulus, make_cfg(INVERSE, s), n_batch);
+#else
     pmul_ext(d_ext, s);
     intt_A(s);
+#endif
 }
 
 void BigIntNTTBatch::psq_and_intt(cudaStream_t s)
 {
+#ifdef MR_NTT_FUSED_PMUL
+    GPU_INTT_Inplace_PreSq(d_buf_A, d_inv_table, modulus, make_cfg(INVERSE, s), n_batch);
+#else
     psq(s);
     intt_A(s);
+#endif
 }
 
 // ── Schoolbook (MUL_SCHOOLBOOK) ─────────────────────────────────────

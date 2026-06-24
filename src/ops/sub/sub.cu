@@ -180,8 +180,9 @@ namespace ops
     }
 
     void copy_low(LimbT *out, const LimbT *r, int out_limbs, int W,
-                  int n_batch, int thr, cudaStream_t s)
+                  int n_batch, cudaStream_t s)
     {
+        constexpr int thr = MR_THR_COPY;
         dim3 g((unsigned)(out_limbs + thr - 1) / thr, (unsigned)n_batch);
         copy_low_k<LimbT><<<g, thr, 0, s>>>(out, r, out_limbs, W, n_batch);
     }

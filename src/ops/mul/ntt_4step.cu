@@ -29,8 +29,8 @@ static constexpr int CARRY_TILE = MR_CARRY_TILE;
 // ── kernels (same as the merge backend; the transformed domain is elementwise) ─
 
 __global__ static void load_padded_batch(Data64 *__restrict__ dst,
-                                          const Data64 *__restrict__ src,
-                                          int n_src, int padded, int n_batch)
+                                         const Data64 *__restrict__ src,
+                                         int n_src, int padded, int n_batch)
 {
     int cand = blockIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
@@ -64,7 +64,11 @@ __global__ static void schoolbook_mul_kernel(
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (cand >= n_batch || j >= padded)
         return;
-    if (j >= 2 * n_limbs) { d_buf_A[(size_t)cand * padded + j] = 0ULL; return; }
+    if (j >= 2 * n_limbs)
+    {
+        d_buf_A[(size_t)cand * padded + j] = 0ULL;
+        return;
+    }
     const Data64 *A = d_A + (size_t)cand * n_limbs;
     const Data64 *B = d_B + (size_t)cand * n_limbs;
     uint64_t acc = 0;
@@ -83,7 +87,11 @@ __global__ static void schoolbook_sq_kernel(
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (cand >= n_batch || j >= padded)
         return;
-    if (j >= 2 * n_limbs) { d_buf_A[(size_t)cand * padded + j] = 0ULL; return; }
+    if (j >= 2 * n_limbs)
+    {
+        d_buf_A[(size_t)cand * padded + j] = 0ULL;
+        return;
+    }
     const Data64 *A = d_A + (size_t)cand * n_limbs;
     uint64_t acc = 0;
     int i_lo = (j >= n_limbs) ? j - n_limbs + 1 : 0;
@@ -290,9 +298,21 @@ void Ntt4StepBatch::pmul_ext(const Data64 *d_ext, cudaStream_t s)
     pmul_batch<<<blk, thr, 0, s>>>(d_buf_A, d_ext, total, p_val);
 }
 
-void Ntt4StepBatch::pmul_and_intt(cudaStream_t s) { pmul(s); intt_A(s); }
-void Ntt4StepBatch::psq_and_intt(cudaStream_t s) { psq(s); intt_A(s); }
-void Ntt4StepBatch::pmul_ext_and_intt(const Data64 *d_ext, cudaStream_t s) { pmul_ext(d_ext, s); intt_A(s); }
+void Ntt4StepBatch::pmul_and_intt(cudaStream_t s)
+{
+    pmul(s);
+    intt_A(s);
+}
+void Ntt4StepBatch::psq_and_intt(cudaStream_t s)
+{
+    psq(s);
+    intt_A(s);
+}
+void Ntt4StepBatch::pmul_ext_and_intt(const Data64 *d_ext, cudaStream_t s)
+{
+    pmul_ext(d_ext, s);
+    intt_A(s);
+}
 
 // ── schoolbook ───────────────────────────────────────────────────────────────────
 

@@ -7,14 +7,21 @@
                         Algorithm
 ------------------------------------------------------*/
 
-// Exponentiation window. Range: 4–10.
+// Sliding-window size for modular exponentiation (base^exp mod N).
+// Controls the power-table size: 2^MR_WINDOW_BITS entries per candidate.
+// Larger = fewer squarings but more VRAM for the table. Range: 4–10.
 #define MR_WINDOW_BITS @MR_WINDOW_BITS@
 
-// Candidates per GPU call. The larger this is, the more VRAM is used.
+// Number of candidates processed in a single GPU kernel launch.
+// All candidates in a batch must share the same n_limbs.
+// Larger = better GPU utilization but higher peak VRAM usage.
 #define MR_BATCH_SIZE @MR_BATCH_SIZE@
 
-// Limb base (params.cmake): each limb is a digit in base 2^LIMB_BITS.
-// The precision guards in the multiplication backends validate this at runtime.
+// Base of the big-integer limb representation: each limb is a digit in base 2^LIMB_BITS.
+// Smaller → more limbs (slower) but more precision headroom for FFT/NTT backends.
+// Larger → fewer limbs (faster) but product coefficients grow faster, risking overflow.
+// Runtime guards in each multiplication backend validate safety for the chosen size.
+// Sane range: 4–30.
 #define LIMB_BITS @LIMB_BITS@
 #if (LIMB_BITS) < 4 || (LIMB_BITS) > 30
 #error "LIMB_BITS out of the sane range [4,30] (params.cmake). Above ~30 overflows the carry/product accumulators."
@@ -25,74 +32,87 @@
          All must be a multiple of 32 (warp size).
 ------------------------------------------------------*/
 
-// load_padded_batch: copies and zero-pads the input limbs into the NTT buffer
 #define MR_THR_LOAD @MR_THR_LOAD@
-// pmul_batch / psq_batch: pointwise multiply/square in the NTT domain
 #define MR_THR_PMUL @MR_THR_PMUL@
-// extract_low / shift_right: Montgomery reduction kernels (reduce_batch)
-#define MR_THR_REDUCE @MR_THR_REDUCE@
-// select_window_kernel: reads the correct power-table entry for the current window
+#define MR_THR_ADD @MR_THR_ADD@
 #define MR_THR_SELECT_WIN @MR_THR_SELECT_WIN@
-// check_passed_kernel / check_equals_kernel: compares the MR result against 1 or N-1
 #define MR_THR_CHECK @MR_THR_CHECK@
-// bar_copy_out (Barrett): copies the final residue r[0..n_limbs) → out
 #define MR_THR_COPY @MR_THR_COPY@
-// carry_inter_tiles (CARRY_ALG_MULTI_TILE): threads per block in the inter-tile phase
 #define MR_CARRY_INTER_THR @MR_CARRY_INTER_THR@
 
 /** --------------------------------------------------
              Carry normalization — available algorithms
 
   CARRY_ALG_SINGLE_TILE — 1 block per candidate, MR_CARRY_TILE threads.
-    All tiles of a candidate are processed by a single block with
-    shared-memory carry between tiles. Lower GPU occupancy but simple.
+    All tiles of a candidate are processed by a single block using
+    shared-memory carry propagation between tiles.
+    Lower GPU occupancy but no inter-block synchronization needed.
 
-  CARRY_ALG_MULTI_TILE  — 2 separate phases:
-    Phase 1 (intra): n_tiles × n_batch blocks in parallel, each one
-      normalizes MR_CARRY_TILE elements with an output carry in d_tile_carry.
-    Phase 2 (inter): 1 thread per candidate, propagates carries between tiles
-      sequentially. Better occupancy in the intra phase.
+  CARRY_ALG_MULTI_TILE  — 2 separate kernel launches:
+    Phase 1 (intra): n_tiles × n_batch blocks in parallel; each block
+      normalizes MR_CARRY_TILE limbs and writes its output carry to d_tile_carry.
+    Phase 2 (inter): 1 thread per candidate propagates the tile carries
+      sequentially. Higher occupancy in phase 1 than SINGLE_TILE.
 
-  CARRY_ALG_SEQUENTIAL  — 1 thread per candidate, pure sequential loop
-    over all elements. Minimal shared memory, maximal serialization.
-    Useful as a baseline or when other algorithms have race conditions.
+  CARRY_ALG_SEQUENTIAL  — 1 thread per candidate iterates over all limbs
+    sequentially. Minimal shared memory; useful as a correctness baseline
+    or when the tile algorithms exhibit race conditions.
+
+  CARRY_ALG_PREFIX_SCAN — parallel prefix-scan over all limbs in one pass.
+    Highest theoretical occupancy; experimental.
 
 ------------------------------------------------------*/
 
 #define CARRY_NORM_ALG @CARRY_NORM_ALG@
 
-// Carry window size (threads per block).
-// Used by the TILE algorithms.
+// Threads per block (tile width) for the SINGLE_TILE and MULTI_TILE carry kernels.
+// Each thread handles one limb; must be a multiple of 32.
 #define MR_CARRY_TILE @MR_CARRY_TILE@
 
 /** --------------------------------------------------
               Conditional subtraction (cond_sub)
 ------------------------------------------------------*/
 
-// cs_phase1 / cs_apply: tile size of the conditional subtraction (cond_sub_batch)
+// Tile width for cond_sub_batch (cs_phase1 + cs_apply kernels).
+// cs_phase1 scans MR_SUB_TILE limbs per block to determine the borrow chain;
+// cs_apply uses the same tile to write the corrected output.
 #define MR_SUB_TILE @MR_SUB_TILE@
 
 /** --------------------------------------------------
                        Monitoring
 ------------------------------------------------------*/
 
-// Minimum interval between progress-bar updates (ms).
+// Minimum wall-clock interval between progress-bar screen updates (milliseconds).
+// Smaller = more frequent updates at the cost of minor printf overhead.
 #define MR_PROGRESS_INTERVAL_MS @MR_PROGRESS_INTERVAL_MS@
 
-// Advanced monitor: prints carry iteration statistics (adds overhead).
+// When defined, the monitor also prints per-batch carry normalization statistics
+// (min/max/avg iterations). Useful for tuning CARRY_NORM_ALG; adds measurable overhead.
 #cmakedefine MR_ADVANCED_MONITOR
+
+// When defined, the pointwise NTT-domain multiply/square is fused into the
+// first INTT kernel, saving one full global-memory round-trip per multiplication.
+// Only active for MUL_NTT_MERGE backend.
+#cmakedefine MR_NTT_FUSED_PMUL
 
 /** --------------------------------------------------
       Big-integer multiplication algorithm
       (mont_mul_batch / mont_sq_batch)
 ------------------------------------------------------*/
 
-// Big-int multiplication algorithm (product + NTT backend). Resolved in
-// ops/mul/multiplier.cuh. Values in constants.h (MUL_SCHOOLBOOK|MUL_MERGE_GPUNTT|MUL_4STEP_GPUNTT).
+// Selects the big-integer multiplication backend used for every modular
+// multiply and square throughout the Miller–Rabin pipeline.
+// Resolves to the Multiplier type alias in ops/mul/multiplier.cuh.
+// Values and per-backend digit limits are defined in constants.h.
 #define MUL_ALG @MUL_ALG@
 
 /** --------------------------------------------------
       Modular reduction algorithm (modmul / modsq)
 ------------------------------------------------------*/
 
+// Selects how the product of two n-limb integers is reduced modulo N.
+// MOD_RED_MONTGOMERY: REDC — operands live in Montgomery form (x·R mod N);
+//   requires a conversion step but shares the NTT buffer with the multiply.
+// MOD_RED_BARRETT: precomputes μ = floor(b^{2k}/N) once per batch;
+//   operands stay in plain residue form, no conversion overhead.
 #define MOD_REDUCTION_ALG @MOD_REDUCTION_ALG@

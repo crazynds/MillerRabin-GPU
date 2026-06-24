@@ -2,87 +2,149 @@
 
 # ── Miller-Rabin GPU ──────────────────────────────────────────────────────────
 
-# Exponentiation window (range: 4–10)
+# Sliding-window size for modular exponentiation (base^exp mod N).
+# Controls the power-table size: 2^MR_WINDOW_BITS entries per candidate.
+# Larger = fewer squarings per round but more VRAM for the table. Range: 4–10.
 set(MR_WINDOW_BITS 8)
 
-# Candidates per GPU call. The larger this is, the more VRAM is used.
+# Number of candidates processed in a single GPU kernel launch.
+# All candidates in a batch must share the same n_limbs (the driver sub-batches
+# automatically by limb count). Larger = better GPU utilization but higher peak VRAM.
 set(MR_BATCH_SIZE 256)
 
-# Per-thread register limit for CUDA compilation (nvcc -maxrregcount).
-# 0 = no limit (let nvcc decide). Smaller values increase GPU occupancy at the
-# cost of possible spills to local memory.
+# Per-thread register limit passed to nvcc as -maxrregcount.
+# 0 = no limit (let nvcc decide). Lower values increase GPU occupancy (more active
+# warps per SM) at the cost of spilling registers to local memory when exceeded.
 set(MR_MAXRREGCOUNT 0)
 
-# Threads per block for each kernel (must be a multiple of 32)
+# ── Threads per block for each kernel (must be a multiple of 32) ──────────────
+
+# load_padded_batch: loads n_limbs coefficients into the NTT buffer (zero-padded
+# to `padded`). One thread per output coefficient; grid is 2D (batch × coeff).
 set(MR_THR_LOAD        256)
+
+# pmul_batch / psq_batch: pointwise multiply or square in the NTT/FFT domain.
+# One thread per spectral coefficient; total elements = n_batch × padded.
+# Only used when MR_NTT_FUSED_PMUL is OFF (see below).
 set(MR_THR_PMUL        256)
-set(MR_THR_REDUCE      256)
+
+# vadd_batch: adds two raw coefficient buffers element-wise (used before carry
+# normalization in Montgomery/Barrett add path). One thread per limb.
+set(MR_THR_ADD         256)
+
+# select_window_kernel: selects the precomputed power-table entry for each
+# candidate based on the current exponent window. One thread per limb.
 set(MR_THR_SELECT_WIN  256)
+
+# check_equals_kernel: compares r against N-1 (or 1) to determine Miller-Rabin
+# pass/fail for each candidate. One thread per limb; result reduced via shared mem.
 set(MR_THR_CHECK       256)
+
+# copy kernels (e.g. Montgomery/Barrett result copy-out). One thread per limb.
 set(MR_THR_COPY        128)
+
+# Inter-tile carry thread count for CARRY_ALG_MULTI_TILE phase 2.
+# One thread per candidate; processes the escaped tile-carries sequentially.
+# Low value is intentional: this phase is bandwidth-limited, not compute-limited.
 set(MR_CARRY_INTER_THR  32)
 
-# Carry algorithm: CARRY_ALG_SEQUENTIAL | CARRY_ALG_SINGLE_TILE | CARRY_ALG_MULTI_TILE | CARRY_ALG_PREFIX_SCAN
+# ── Carry normalization algorithm ─────────────────────────────────────────────
+#
+# CARRY_ALG_SINGLE_TILE — 1 block per candidate, MR_CARRY_TILE threads.
+#   All tiles of a candidate are handled by one block using shared-memory carry
+#   propagation. Low occupancy but simple; no inter-block coordination.
+#
+# CARRY_ALG_MULTI_TILE  — 2 separate kernel launches:
+#   Phase 1 (intra): n_tiles × n_batch blocks normalize MR_CARRY_TILE limbs each
+#     and write output carries to d_tile_carry (high parallelism).
+#   Phase 2 (inter): 1 thread per candidate (MR_CARRY_INTER_THR) propagates the
+#     tile carries sequentially. Better GPU occupancy than SINGLE_TILE.
+#
+# CARRY_ALG_SEQUENTIAL  — 1 thread per candidate iterates over all limbs.
+#   Minimal shared memory; correctness baseline or fallback for race-condition debugging.
+#
+# CARRY_ALG_PREFIX_SCAN — parallel prefix-scan over all limbs in one pass.
+#   Highest theoretical occupancy; experimental.
 set(CARRY_NORM_ALG CARRY_ALG_SINGLE_TILE)
 
-# Carry tile size
+# Threads per block (tile width) for SINGLE_TILE and MULTI_TILE carry kernels.
+# Each thread processes one limb. Must be a multiple of 32.
 set(MR_CARRY_TILE 32)
 
-# Tile used for subtraction
+# Tile width for cond_sub_batch (cs_phase1 + cs_apply kernels).
+# cs_phase1 scans MR_SUB_TILE limbs per block to determine the borrow chain;
+# cs_apply uses the same tile width to write the corrected output.
 set(MR_SUB_TILE 256)
 
-# Minimum interval between progress-bar updates (ms)
+# Minimum wall-clock interval between progress-bar screen updates (milliseconds).
 set(MR_PROGRESS_INTERVAL_MS 2000)
 
-# Advanced monitor: prints carry iteration statistics (adds overhead).
+# When ON, the monitor also prints per-batch carry normalization statistics
+# (min/max/avg iterations per batch). Useful for tuning CARRY_NORM_ALG.
+# Adds measurable printf overhead; keep OFF for production runs.
 # ON | OFF
 set(MR_ADVANCED_MONITOR OFF)
 
-# Limb base: each limb is a digit in base 2^LIMB_BITS.
-# Smaller (e.g. 8) → more limbs (slower) but much more precision headroom for the
-# FFT backends (double) and coefficient headroom for NTT. Larger (e.g. 20) → fewer
-# limbs (faster) but overflows precision sooner. Runtime guards (multiplication
-# backend constructors) validate whether the value is safe for the size + algorithm.
-# Sane range: 4 to 30.
+# Base of the big-integer limb representation: each limb is a digit in base 2^LIMB_BITS.
+# Smaller (e.g. 8) → more limbs (slower) but more precision headroom for FFT backends
+# (double mantissa) and more coefficient headroom for NTT prime selection.
+# Larger (e.g. 20) → fewer limbs (faster) but product coefficients grow faster,
+# risking precision overflow sooner. Runtime guards in each backend validate safety.
+# Sane range: 4–30.
 set(LIMB_BITS 16)
 
-# Big-integer multiplication algorithm (compile-time). SINGLE parameter: defines
-# both the product AND which backend the Multiplier class resolves (see
-# ops/mul/multiplier.cuh).
+# ── Big-integer multiplication algorithm ──────────────────────────────────────
 #
-# Limit in DECIMAL DIGITS (D). min = 1 (over-padding). Runtime guards abort if it
-# is exceeded. b = LIMB_BITS. Schoolbook is unlimited (only bounded by O(n²) perf).
+# Compile-time selection of the backend used for every modular multiply/square
+# in the Miller–Rabin pipeline. Resolves to the Multiplier type alias in
+# ops/mul/multiplier.cuh. Also determines which external library is fetched.
 #
-# Maximum D formulas, all in DIGITS:
-#   exact (NTT) — linear in b:
-#     MUL_MERGE_GPUNTT : D ≤ 4.0e7 · b           (logn ≤ 28)
-#     MUL_4STEP_GPUNTT : D ≤ 2.5e6 · b           (logn ≤ 24)
-#   approximate (FFT, 52-bit double mantissa) — largest D satisfying:
-#     (3.32·D/b) · log2(6.64·D/b) < 2^(50−2b)
-#     (cuFFT only that; GPUFFT/FFNT also have logn ≤ 24 ⇒ extra cap D ≤ 2.5e6·b)
+# Digit limit D_max is computed from LIMB_BITS (b). Runtime guards abort if exceeded.
+# Schoolbook is unbounded but O(n²); all others are O(n log n).
+#
+# Exact (NTT, no rounding error):
+#   MUL_MERGE_GPUNTT  — GPU-NTT "merge" style. Production default. D ≤ 4.0e7·b.
+#   MUL_4STEP_GPUNTT  — GPU-NTT "4-step" radix, transposes for large n. D ≤ 2.5e6·b.
+#
+# Approximate (FFT, 52-bit double mantissa — rounding limits max D):
+#   MUL_FFT_CUFFT     — complex FFT via NVIDIA cuFFT library.
+#   MUL_FFT_GPUFFT    — complex C2C FFT from GPU-FFT (Alisah-Ozcan), logn ≤ 24.
+#   MUL_FFNT_GPUFFT   — real negacyclic FFT (FFNT) from GPU-FFT, ~2× throughput vs C2C.
+#
+# Schoolbook:
+#   MUL_SCHOOLBOOK    — O(n²) direct convolution. Only for small n_limbs; baseline.
 #
 #   D_max (digits):                 b=16     b=12     b=8
 #   MUL_SCHOOLBOOK                  ∞        ∞        ∞
 #   MUL_MERGE_GPUNTT                ~6.5e8   ~4.8e8   ~3.2e8
 #   MUL_4STEP_GPUNTT                ~4.0e7   ~3.0e7   ~2.0e7
 #   MUL_FFT_CUFFT                   ~7.9e4   ~1.0e7   ~1.3e9
-#   MUL_FFT_GPUFFT                  ~7.9e4   ~1.0e7   ~2.0e7   (cap logn≤24)
-#   MUL_FFNT_GPUFFT                 ~7.9e4   ~1.0e7   ~2.0e7   (cap logn≤24)
+#   MUL_FFT_GPUFFT                  ~7.9e4   ~1.0e7   ~2.0e7   (logn ≤ 24)
+#   MUL_FFNT_GPUFFT                 ~7.9e4   ~1.0e7   ~2.0e7   (logn ≤ 24)
 set(MUL_ALG MUL_MERGE_GPUNTT)
 
+# Fuse the pointwise NTT-domain multiply/square into the first INTT kernel. 
+# Only effective on MUL_NTT_MERGE backend.
+# Set to OFF to fall back to the separate pmul_batch + INTT approach.
+set(MR_NTT_FUSED_PMUL  ON)
+
 # Modular reduction algorithm used in modmul/modsq:
-#   MOD_RED_MONTGOMERY       — REDC (Montgomery working form). Default.
-#   MOD_RED_BARRETT          — Barrett reduction (working form = plain residue).
+#   MOD_RED_MONTGOMERY — REDC. Operands live in Montgomery form (x·R mod N).
+#     Conversion to/from Montgomery form adds a small one-time cost per batch,
+#     but the reduction itself reuses the NTT multiply buffer.
+#   MOD_RED_BARRETT    — Barrett reduction. Operands stay in plain residue form
+#     (x mod N). Precomputes μ = floor(b^{2k}/N) once per batch setup; no
+#     conversion overhead per multiply.
 set(MOD_REDUCTION_ALG MOD_RED_BARRETT)
 
 # ── GPU-NTT (Alisah-Ozcan/GPU-NTT library) ────────────────────────────────────
 
-# Enable kernel tables optimized for the RTX 4090 (Compute Capability 8.9).
-# ON  → use CC_89 configs for n_power 27 and 28 (shared_mem 1024×T, larger grids)
-# OFF → use generic configs for those ranges
+# Enable kernel launch configs optimized for the RTX 4090 (Compute Capability 8.9).
+# ON  → use CC_89 configs for n_power 27 and 28 (shared_mem 1024×T, larger grids).
+# OFF → use generic configs that work on all supported architectures.
 set(GPUNTT_CC89 ON)
 
-# NTT layout in the batch:
-#   PerPolynomial  — NTT per row (per candidate). Recommended default.
-#   PerCoefficient — NTT per column (per coefficient index across candidates).
+# Memory layout of NTT transforms within a batch:
+#   PerPolynomial  — one NTT per row (per candidate). Recommended default.
+#   PerCoefficient — one NTT per column (per coefficient index across candidates).
 set(GPUNTT_NTT_LAYOUT PerPolynomial)

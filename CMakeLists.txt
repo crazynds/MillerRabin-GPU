@@ -68,7 +68,9 @@ elseif(MUL_ALG STREQUAL "MUL_FFT_GPUFFT")
 elseif(MUL_ALG STREQUAL "MUL_FFNT_GPUFFT")
     set(MUL_BACKEND_SRC ${SRC_DIR}/ops/mul/fft_ffnt.cu)
 else()
-    set(MUL_BACKEND_SRC ${SRC_DIR}/ops/mul/ntt_merge.cu)
+    set(MUL_BACKEND_SRC
+        ${SRC_DIR}/ops/mul/ntt_merge.cu
+        ${SRC_DIR}/lib/gpuntt/ntt_merge_intt_fused.cu)
 endif()
 message(STATUS "MUL_ALG = ${MUL_ALG} → ${MUL_BACKEND_SRC}")
 
@@ -82,6 +84,11 @@ if(MR_ADVANCED_MONITOR)
     set(MR_ADVANCED_MONITOR 1)
 else()
     unset(MR_ADVANCED_MONITOR)
+endif()
+if(MR_NTT_FUSED_PMUL)
+    set(MR_NTT_FUSED_PMUL 1)
+else()
+    unset(MR_NTT_FUSED_PMUL)
 endif()
 configure_file(
     ${SRC_DIR}/config.h.in

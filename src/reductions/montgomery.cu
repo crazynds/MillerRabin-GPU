@@ -14,14 +14,31 @@
 #if MOD_REDUCTION_ALG == MOD_RED_MONTGOMERY
 
 // Local indices (children of perf_cur->child(PERF_RED)):
-namespace {
-    enum MontRedIdx { MONTR_MUL = 0, MONTR_SOMA = 1, MONTR_SHIFT = 2 };
+namespace
+{
+    enum MontRedIdx
+    {
+        MONTR_MUL = 0,
+        MONTR_SOMA = 1,
+        MONTR_SHIFT = 2
+    };
     // Children of MONTR_MUL:
-    enum MontMulIdx { MONTM_NTT_TLOW = 0, MONTM_PMUL_NP = 1, MONTM_INTT_NP = 2,
-                      MONTM_CARRY_M  = 3, MONTM_NTT_M   = 4, MONTM_PMUL_N  = 5,
-                      MONTM_INTT_N   = 6 };
+    enum MontMulIdx
+    {
+        MONTM_NTT_TLOW = 0,
+        MONTM_PMUL_NP = 1,
+        MONTM_INTT_NP = 2,
+        MONTM_CARRY_M = 3,
+        MONTM_NTT_M = 4,
+        MONTM_PMUL_N = 5,
+        MONTM_INTT_N = 6
+    };
     // Children of MONTR_SOMA:
-    enum MontSomaIdx { MONTS_VADD = 0, MONTS_CARRY = 1 };
+    enum MontSomaIdx
+    {
+        MONTS_VADD = 0,
+        MONTS_CARRY = 1
+    };
 }
 
 // ── specific GMP helpers ──────────────────────────────────────────────────────
@@ -118,25 +135,31 @@ void BatchModCtx::cond_sub_batch(LimbT *d_x, cudaStream_t s)
 // computes out = T · R^{-1} mod N for each candidate.
 void BatchModCtx::reduce_batch(LimbT *d_out, cudaStream_t s)
 {
-    const int thr = MR_THR_REDUCE;
 
-    PerfNode *red  = perf_cur->child(PERF_RED);
-    PerfNode *mul  = red->child(MONTR_MUL);
+    PerfNode *red = perf_cur->child(PERF_RED);
+    PerfNode *mul = red->child(MONTR_MUL);
     PerfNode *soma = red->child(MONTR_SOMA);
     PerfNode *csub = perf_cur->child(PERF_FIN);
 
     // Step 1: m = (T mod R) · N' mod R. T_low = first n_limbs limbs of T.
     TSTART();
-    ops::extract_low(reinterpret_cast<LimbT *>(ntt.d_buf_A), d_T, n_limbs, padded, n_sum, n_batch, thr, s);
+    ops::extract_low(reinterpret_cast<LimbT *>(ntt.d_buf_A), d_T, n_limbs, padded, n_sum, n_batch, s);
     ntt.fwd_A(s);
     TSTOP(mul->child(MONTM_NTT_TLOW));
 
+
+#ifdef MR_NTT_FUSED_PMUL
+    TSTART();
+    ntt.pmul_ext_and_intt(d_ntt_Nprime, s);
+    TSTOP(mul->child(MONTM_INTT_NP));
+#else
     TSTART();
     ntt.pmul_ext(d_ntt_Nprime, s);
     TSTOP(mul->child(MONTM_PMUL_NP));
     TSTART();
     ntt.intt_A(s);
     TSTOP(mul->child(MONTM_INTT_NP));
+#endif
     TSTART();
     ntt.carry_to_limbs(d_m, n_limbs, s);
     TSTOP(mul->child(MONTM_CARRY_M));
@@ -145,12 +168,18 @@ void BatchModCtx::reduce_batch(LimbT *d_out, cudaStream_t s)
     TSTART();
     ntt.ntt_A(d_m, n_limbs, s);
     TSTOP(mul->child(MONTM_NTT_M));
+#ifdef MR_NTT_FUSED_PMUL
+    TSTART();
+    ntt.pmul_ext_and_intt(d_ntt_N, s);
+    TSTOP(mul->child(MONTM_INTT_N));
+#else
     TSTART();
     ntt.pmul_ext(d_ntt_N, s);
     TSTOP(mul->child(MONTM_PMUL_N));
     TSTART();
     ntt.intt_A(s);
     TSTOP(mul->child(MONTM_INTT_N));
+#endif
 
     // Step 3: T += mN, normalize carries.
 #if CARRY_NORM_ALG == CARRY_ALG_SEQUENTIAL
@@ -168,7 +197,7 @@ void BatchModCtx::reduce_batch(LimbT *d_out, cudaStream_t s)
 
     // Step 4: out = (T + mN) / R = right shift by n_limbs positions.
     TSTART();
-    ops::shift_right(d_out, d_T, n_limbs, n_limbs, n_sum, n_batch, thr, s);
+    ops::shift_right(d_out, d_T, n_limbs, n_limbs, n_sum, n_batch, s);
     TSTOP(red->child(MONTR_SHIFT));
 
     // Step 5: conditional subtraction — ensures out < N.

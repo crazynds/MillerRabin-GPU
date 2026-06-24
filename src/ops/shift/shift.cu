@@ -47,22 +47,25 @@ namespace
 namespace ops
 {
     void shift_right(LimbT *dst, const LimbT *src, int offset,
-                     int n_out, int n_src, int n_batch, int thr, cudaStream_t s)
+                     int n_out, int n_src, int n_batch, cudaStream_t s)
     {
+        const int thr = MR_THR_COPY;
         dim3 g((unsigned)(n_out + thr - 1) / thr, (unsigned)n_batch);
         shift_right_k<LimbT><<<g, thr, 0, s>>>(dst, src, offset, n_out, n_src, n_batch);
     }
 
     void shift_right_var(LimbT *dst, const LimbT *src, const int *bark, int delta,
-                         int n_out, int n_src, int n_batch, int thr, cudaStream_t s)
+                         int n_out, int n_src, int n_batch, cudaStream_t s)
     {
+        const int thr = MR_THR_COPY;
         dim3 g((unsigned)(n_out + thr - 1) / thr, (unsigned)n_batch);
         shift_right_var_k<LimbT><<<g, thr, 0, s>>>(dst, src, bark, delta, n_out, n_src, n_batch);
     }
 
     void extract_low(LimbT *dst, const LimbT *src, int n_low, int padded,
-                     int n_sum, int n_batch, int thr, cudaStream_t s)
+                     int n_sum, int n_batch, cudaStream_t s)
     {
+        const int thr = MR_THR_COPY;
         dim3 g((unsigned)(padded + thr - 1) / thr, (unsigned)n_batch);
         extract_low_k<LimbT><<<g, thr, 0, s>>>(dst, src, n_low, padded, n_sum, n_batch);
     }

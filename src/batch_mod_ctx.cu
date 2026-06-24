@@ -140,7 +140,7 @@ BatchModCtx::BatchModCtx(const std::vector<uint64_t> &N_all, int n_limbs_, int n
 
     timer.init();
     perf_mul = build_perf_nodes("mul");
-    perf_sq  = build_perf_nodes("sq");
+    perf_sq = build_perf_nodes("sq");
 }
 
 BatchModCtx::~BatchModCtx()
@@ -179,7 +179,7 @@ PerfNode *BatchModCtx::build_perf_nodes(const char *ctx_name)
     PerfNode *red = ctx->branch("Barrett reduction");
     red->branch("shift (A1,q)");
     red->branch("q2 = A1.mu", {"ntt(A1)", "pmul(mu)", "intt(q2)", "carry(q2)"});
-    red->branch("qn = q.N",   {"ntt(q)",  "pmul(N)",  "intt(qn)", "carry(qn)"});
+    red->branch("qn = q.N", {"ntt(q)", "pmul(N)", "intt(qn)", "carry(qn)"});
 
     // PERF_FIN = child(2): "barrett_finalize"
     ctx->branch("barrett_finalize", {"sub (T-qn)", "cond_sub N (2x)", "copy_out"});
@@ -272,12 +272,18 @@ void BatchModCtx::modmul_batch(const LimbT *d_A, const LimbT *d_B, LimbT *d_out,
     TSTOP(prod->child(PERF_PROD_NTT));
 
 #if MUL_ALG != MUL_SCHOOLBOOK
+#ifdef MR_NTT_FUSED_PMUL
+    TSTART();
+    ntt.pmul_and_intt(s);
+    TSTOP(prod->child(PERF_PROD_INTT));
+#else
     TSTART();
     ntt.pmul(s);
     TSTOP(prod->child(PERF_PROD_PMUL));
     TSTART();
     ntt.intt_A(s);
     TSTOP(prod->child(PERF_PROD_INTT));
+#endif
 #endif
 
     TSTART();
@@ -302,12 +308,18 @@ void BatchModCtx::modsq_batch(const LimbT *d_A, LimbT *d_out, cudaStream_t s)
     TSTOP(prod->child(PERF_PROD_NTT));
 
 #if MUL_ALG != MUL_SCHOOLBOOK
+#ifdef MR_NTT_FUSED_PMUL
+    TSTART();
+    ntt.psq_and_intt(s);
+    TSTOP(prod->child(PERF_PROD_INTT));
+#else
     TSTART();
     ntt.psq(s);
     TSTOP(prod->child(PERF_PROD_PMUL));
     TSTART();
     ntt.intt_A(s);
     TSTOP(prod->child(PERF_PROD_INTT));
+#endif
 #endif
 
     TSTART();

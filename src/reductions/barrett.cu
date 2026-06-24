@@ -144,7 +144,6 @@ void BatchModCtx::cond_sub_batch(LimbT *, cudaStream_t) {}
 //   out = T − q̂·N, with up to 2 final subtractions of N.
 void BatchModCtx::reduce_batch(LimbT *d_out, cudaStream_t s)
 {
-    const int thr = MR_THR_REDUCE;
     const int W1 = bar_W1;
 
     PerfNode *red = perf_cur->child(PERF_RED);
@@ -154,34 +153,48 @@ void BatchModCtx::reduce_batch(LimbT *d_out, cudaStream_t s)
 
     // Step 1: A1 = floor(T / b^{k_i-1}) → W1 limbs; q2 = A1·μ (NTT) → d_bar_prod.
     TSTART();
-    ops::shift_right_var(d_bar_w1, d_T, d_bar_k, -1, W1, n_sum, n_batch, thr, s);
+    ops::shift_right_var(d_bar_w1, d_T, d_bar_k, -1, W1, n_sum, n_batch, s);
     TSTOP(red->child(BAR_SHIFT));
     TSTART();
     ntt.ntt_A(d_bar_w1, W1, s);
     TSTOP(q2->child(Q_NTT));
+
+#ifdef MR_NTT_FUSED_PMUL
+    TSTART();
+    ntt.pmul_ext_and_intt(d_ntt_mu, s);
+    TSTOP(q2->child(Q_INTT));
+#else
     TSTART();
     ntt.pmul_ext(d_ntt_mu, s);
     TSTOP(q2->child(Q_PMUL));
     TSTART();
     ntt.intt_A(s);
     TSTOP(q2->child(Q_INTT));
+#endif
     TSTART();
     ntt.carry_to_limbs(d_bar_prod, n_sum, s);
     TSTOP(q2->child(Q_CARRY));
 
     // Step 2: q̂ = floor(q2 / b^{k_i+1}) → W1 limbs; qn = q̂·N (NTT) → d_bar_prod.
     TSTART();
-    ops::shift_right_var(d_bar_w1, d_bar_prod, d_bar_k, +1, W1, n_sum, n_batch, thr, s);
+    ops::shift_right_var(d_bar_w1, d_bar_prod, d_bar_k, +1, W1, n_sum, n_batch, s);
     TSTOP(red->child(BAR_SHIFT));
     TSTART();
     ntt.ntt_A(d_bar_w1, W1, s);
     TSTOP(qn->child(Q_NTT));
+
+#ifdef MR_NTT_FUSED_PMUL
+    TSTART();
+    ntt.pmul_ext_and_intt(d_ntt_N, s);
+    TSTOP(qn->child(Q_INTT));
+#else
     TSTART();
     ntt.pmul_ext(d_ntt_N, s);
     TSTOP(qn->child(Q_PMUL));
     TSTART();
     ntt.intt_A(s);
     TSTOP(qn->child(Q_INTT));
+#endif
     // Lever 2: normalizes only the low W1 limbs of qn (the high ones cancel in T−qn).
     // carry_to_limbs writes d_bar_prod with stride = W1; the subtraction below reads qn
     // with stride W1 (sb=W1) — NOT n_sum — otherwise the per-candidate offsets diverge.
@@ -211,7 +224,7 @@ void BatchModCtx::reduce_batch(LimbT *d_out, cudaStream_t s)
 
     //   (c) out = r[0..n_limbs).
     TSTART();
-    ops::copy_low(d_out, d_bar_w1, n_limbs, W1, n_batch, MR_THR_COPY, s);
+    ops::copy_low(d_out, d_bar_w1, n_limbs, W1, n_batch, s);
     TSTOP(fin->child(FIN_COPY));
 }
 

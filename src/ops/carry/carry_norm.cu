@@ -718,11 +718,11 @@ void Multiplier::vadd_raw_buf(LimbT *d_dst, int n_dst, cudaStream_t s)
 {
     LimbT *raw = raw_coeffs();
 #if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
-    int n_tiles = (n_dst + CARRY_TILE - 1) / CARRY_TILE;
-    vadd_from_raw_batch<<<dim3(n_tiles, n_batch), CARRY_TILE, 0, s>>>(
+    int n_tiles = (n_dst + MR_THR_ADD - 1) / MR_THR_ADD;
+    vadd_from_raw_batch<<<dim3(n_tiles, n_batch), MR_THR_ADD, 0, s>>>(
         d_dst, raw, n_dst, padded, n_batch);
 #elif CARRY_NORM_ALG == CARRY_ALG_SINGLE_TILE || CARRY_NORM_ALG == CARRY_ALG_PREFIX_SCAN
-    constexpr int THR = MR_THR_REDUCE;
+    constexpr int THR = MR_THR_ADD;
     unsigned bp = (unsigned)(n_dst + THR - 1) / THR;
     vadd_from_raw_batch<<<dim3(bp, (unsigned)n_batch), THR, 0, s>>>(
         d_dst, raw, n_dst, padded, n_batch);
@@ -795,27 +795,29 @@ void Multiplier::add_and_carry(LimbT *d_a, const LimbT *d_b, int n, int n_passes
                                cudaStream_t s)
 {
 #if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
-    constexpr int THR = MR_CARRY_INTER_THR;
-    int n_tiles = (n + CARRY_TILE - 1) / CARRY_TILE;
-    int inter_blk = (n_batch + THR - 1) / THR;
-    vadd_batch<<<dim3(n_tiles, n_batch), CARRY_TILE, 0, s>>>(
+    constexpr int THR = MR_THR_ADD;
+    unsigned bp = (unsigned)(n + THR - 1) / THR;
+    vadd_batch<<<dim3(bp, n_batch), THR, 0, s>>>(
         d_a, d_a, d_b, n, n_batch);
+    int n_tiles = (n + CARRY_TILE - 1) / CARRY_TILE;
     carry_intra_copy<<<dim3(n_tiles, n_batch), CARRY_TILE, 0, s>>>(
         d_a, d_a, d_tile_carry, n, n, n_batch);
-    carry_inter_tiles<<<inter_blk, THR, 0, s>>>(
+    int inter_blk = (n_batch + MR_CARRY_INTER_THR - 1) / MR_CARRY_INTER_THR;
+    if (n_tiles > 1)
+        carry_propagate_tiles<<<dim3((n_tiles - 1 + MR_CARRY_INTER_THR - 1) / MR_CARRY_INTER_THR, n_batch), MR_CARRY_INTER_THR, 0, s>>>(
+            d_a, d_tile_carry, n, n_batch);
+    carry_inter_tiles<<<inter_blk, MR_CARRY_INTER_THR, 0, s>>>(
         d_a, d_tile_carry, n, n_batch);
 
 #elif CARRY_NORM_ALG == CARRY_ALG_SINGLE_TILE
-    constexpr int THR = MR_THR_REDUCE;
+    constexpr int THR = MR_THR_ADD;
     unsigned bp = (unsigned)(n + THR - 1) / THR;
     vadd_batch<<<dim3(bp, (unsigned)n_batch), THR, 0, s>>>(
         d_a, d_a, d_b, n, n_batch);
     carry_16bits<<<n_batch, CARRY_TILE, 0, s>>>(d_a, d_a, n, n, n_batch);
 
 #elif CARRY_NORM_ALG == CARRY_ALG_SEQUENTIAL
-    // carry_sequential reads d_src and writes d_dst; in-place is safe (j grows)
-    // But first we need to add d_b into d_a
-    constexpr int THR = MR_THR_REDUCE;
+    constexpr int THR = MR_THR_ADD;
     unsigned bp = (unsigned)(n + THR - 1) / THR;
     vadd_batch<<<dim3(bp, (unsigned)n_batch), THR, 0, s>>>(
         d_a, d_a, d_b, n, n_batch);
@@ -823,7 +825,7 @@ void Multiplier::add_and_carry(LimbT *d_a, const LimbT *d_b, int n, int n_passes
     carry_sequential<<<blk, CARRY_TILE, 0, s>>>(d_a, d_a, n, n, n_batch);
 
 #elif CARRY_NORM_ALG == CARRY_ALG_PREFIX_SCAN
-    constexpr int THR = MR_THR_REDUCE;
+    constexpr int THR = MR_THR_ADD;
     unsigned bp = (unsigned)(n + THR - 1) / THR;
     vadd_batch<<<dim3(bp, (unsigned)n_batch), THR, 0, s>>>(
         d_a, d_a, d_b, n, n_batch);

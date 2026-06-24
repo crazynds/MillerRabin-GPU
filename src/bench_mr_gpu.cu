@@ -93,7 +93,8 @@ static std::vector<GroupCandidate> parse_input(const char *path)
     int auto_id = 0;
 
     std::string line;
-    while (std::getline(fin, line)) {
+    while (std::getline(fin, line))
+    {
         // Strip trailing whitespace
         while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
             line.pop_back();
@@ -102,24 +103,32 @@ static std::vector<GroupCandidate> parse_input(const char *path)
 
         std::string label, equation;
         auto colon = line.find(':');
-        if (colon != std::string::npos) {
-            label    = line.substr(0, colon);
+        if (colon != std::string::npos)
+        {
+            label = line.substr(0, colon);
             equation = line.substr(colon + 1);
-        } else {
-            label    = "__auto_" + std::to_string(auto_id++);
+        }
+        else
+        {
+            label = "__auto_" + std::to_string(auto_id++);
             equation = line;
         }
 
         // Trim leading/trailing whitespace from both parts
-        auto trim = [](std::string &s) {
-            while (!s.empty() && std::isspace((unsigned char)s.front())) s.erase(s.begin());
-            while (!s.empty() && std::isspace((unsigned char)s.back()))  s.pop_back();
+        auto trim = [](std::string &s)
+        {
+            while (!s.empty() && std::isspace((unsigned char)s.front()))
+                s.erase(s.begin());
+            while (!s.empty() && std::isspace((unsigned char)s.back()))
+                s.pop_back();
         };
         trim(label);
         trim(equation);
-        if (equation.empty()) continue;
+        if (equation.empty())
+            continue;
 
-        if (groups.find(label) == groups.end()) {
+        if (groups.find(label) == groups.end())
+        {
             order.push_back(label);
             groups[label].label = label;
         }
@@ -145,7 +154,9 @@ static std::pair<bool, double> cpu_test_equation(const std::string &equation)
     auto t0 = hrc::now();
     bool result = mpz_probab_prime_p(N, (int)DEFAULT_WITNESSES.size()) > 0;
     double ms = std::chrono::duration_cast<std::chrono::microseconds>(
-                    hrc::now() - t0).count() / 1000.0;
+                    hrc::now() - t0)
+                    .count() /
+                1000.0;
     mpz_clear(N);
     return {result, ms};
 }
@@ -155,7 +166,7 @@ static void run_cpu_mode(
     std::vector<GroupCandidate> &groups,
     bool show_report)
 {
-    int n_groups   = (int)groups.size();
+    int n_groups = (int)groups.size();
     int max_rounds = 0;
     for (auto &g : groups)
         if ((int)g.equations.size() > max_rounds)
@@ -163,7 +174,8 @@ static void run_cpu_mode(
 
     {
         int total_eqs = 0;
-        for (auto &g : groups) total_eqs += (int)g.equations.size();
+        for (auto &g : groups)
+            total_eqs += (int)g.equations.size();
         printf("Groups: %d  total equations: %d  max rounds: %d\n",
                n_groups, total_eqs, max_rounds);
         printf("CPU mode — Miller-Rabin (GMP)  witnesses: %d\n\n",
@@ -173,13 +185,15 @@ static void run_cpu_mode(
     auto t_global = hrc::now();
     std::vector<bool> alive(n_groups, true);
 
-    for (int round = 0; round < max_rounds; round++) {
+    for (int round = 0; round < max_rounds; round++)
+    {
         std::vector<int> active;
         for (int gi = 0; gi < n_groups; gi++)
             if (alive[gi] && round < (int)groups[gi].equations.size())
                 active.push_back(gi);
 
-        if (active.empty()) break;
+        if (active.empty())
+            break;
 
         printf("\n=== Round %d (%d groups active) ===\n", round + 1, (int)active.size());
         fflush(stdout);
@@ -189,16 +203,20 @@ static void run_cpu_mode(
         double t_min = 1e18, t_max = 0.0, t_sum = 0.0;
         int n_tested = 0;
 
-        for (int gi : active) {
+        for (int gi : active)
+        {
             const std::string &eq = groups[gi].equations[round];
             auto [probably_prime, ms] = cpu_test_equation(eq);
 
             t_sum += ms;
-            if (ms < t_min) t_min = ms;
-            if (ms > t_max) t_max = ms;
+            if (ms < t_min)
+                t_min = ms;
+            if (ms > t_max)
+                t_max = ms;
             n_tested++;
 
-            if (show_report) {
+            if (show_report)
+            {
                 printf("  [%s] %7.1f ms  %s  %s\n",
                        groups[gi].label.c_str(), ms,
                        probably_prime ? "PROBABLY PRIME" : "composite     ",
@@ -212,7 +230,9 @@ static void run_cpu_mode(
         }
 
         double t_r = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         hrc::now() - t_round).count() / 1000.0;
+                         hrc::now() - t_round)
+                         .count() /
+                     1000.0;
         int eliminated = (int)active.size() - survivors_this_round;
         double t_avg = n_tested > 0 ? t_sum / n_tested : 0.0;
         printf("Round %d: %.2fs  —  %d survived, %d eliminated"
@@ -222,17 +242,24 @@ static void run_cpu_mode(
     }
 
     double total_s = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       hrc::now() - t_global).count() / 1000.0;
+                         hrc::now() - t_global)
+                         .count() /
+                     1000.0;
 
     printf("\n=== Results ===\n");
     int n_winners = 0;
-    for (int gi = 0; gi < n_groups; gi++) {
-        if (alive[gi]) {
+    for (int gi = 0; gi < n_groups; gi++)
+    {
+        if (alive[gi])
+        {
             n_winners++;
             auto &g = groups[gi];
-            if (g.label.empty() || g.label.rfind("__auto_", 0) == 0) {
+            if (g.label.empty() || g.label.rfind("__auto_", 0) == 0)
+            {
                 printf("  PRIME: %s\n", g.equations[0].c_str());
-            } else {
+            }
+            else
+            {
                 printf("  PRIME group [%s]:\n", g.label.c_str());
                 for (auto &eq : g.equations)
                     printf("    %s\n", eq.c_str());
@@ -249,28 +276,38 @@ static void run_cpu_mode(
 
 int main(int argc, char *argv[])
 {
-    bool run_tests      = false;
-    bool show_report    = false;
-    bool show_progress  = false;
-    bool run_bench      = false;
+    bool run_tests = false;
+    bool show_report = false;
+    bool show_progress = false;
+    bool run_bench = false;
     bool run_bench_long = false;
-    bool show_config    = false;
-    bool cpu_mode       = false;
+    bool show_config = false;
+    bool cpu_mode = false;
     const char *input_file = nullptr;
 
-    for (int i = 1; i < argc; i++) {
+    for (int i = 1; i < argc; i++)
+    {
         std::string a = argv[i];
-        if      (a == "--test")           run_tests      = true;
-        else if (a == "--report")         show_report    = true;
-        else if (a == "--progress")       show_progress  = true;
-        else if (a == "--bench-ops")      run_bench      = true;
-        else if (a == "--bench-ops-long") run_bench_long = true;
-        else if (a == "--config")         show_config    = true;
-        else if (a == "--cpu")            cpu_mode       = true;
-        else if (!input_file)             input_file     = argv[i];
+        if (a == "--test")
+            run_tests = true;
+        else if (a == "--report")
+            show_report = true;
+        else if (a == "--progress")
+            show_progress = true;
+        else if (a == "--bench-ops")
+            run_bench = true;
+        else if (a == "--bench-ops-long")
+            run_bench_long = true;
+        else if (a == "--config")
+            show_config = true;
+        else if (a == "--cpu")
+            cpu_mode = true;
+        else if (!input_file)
+            input_file = argv[i];
     }
 
-    if (show_config) {
+    if (show_config)
+    {
 #if CARRY_NORM_ALG == CARRY_ALG_SINGLE_TILE
         const char *carry_alg = "SINGLE_TILE";
 #elif CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
@@ -297,20 +334,20 @@ int main(int argc, char *argv[])
         printf("╔══════════════════════════════════════════════════╗\n");
         printf("║  Build configuration                             ║\n");
         printf("╚══════════════════════════════════════════════════╝\n");
-        printf("  window_bits       %d\n",    MR_WINDOW_BITS);
-        printf("  batch_size        %d\n",    MR_BATCH_SIZE);
-        printf("  mont_mul_alg      %s\n",    mul_alg);
-        printf("  mod_reduction_alg %s\n",    mod_red_alg);
-        printf("  carry_norm_alg    %s\n",    carry_alg);
-        printf("  carry_tile        %d\n",    MR_CARRY_TILE);
-        printf("  carry_inter_thr   %d\n",    MR_CARRY_INTER_THR);
-        printf("  thr_load          %d\n",    MR_THR_LOAD);
-        printf("  thr_pmul          %d\n",    MR_THR_PMUL);
-        printf("  thr_reduce        %d\n",    MR_THR_REDUCE);
-        printf("  thr_select_win    %d\n",    MR_THR_SELECT_WIN);
-        printf("  thr_check         %d\n",    MR_THR_CHECK);
-        printf("  thr_copy          %d\n",    MR_THR_COPY);
-        printf("  sub_tile          %d\n",    MR_SUB_TILE);
+        printf("  window_bits       %d\n", MR_WINDOW_BITS);
+        printf("  batch_size        %d\n", MR_BATCH_SIZE);
+        printf("  mont_mul_alg      %s\n", mul_alg);
+        printf("  mod_reduction_alg %s\n", mod_red_alg);
+        printf("  carry_norm_alg    %s\n", carry_alg);
+        printf("  carry_tile        %d\n", MR_CARRY_TILE);
+        printf("  carry_inter_thr   %d\n", MR_CARRY_INTER_THR);
+        printf("  thr_load          %d\n", MR_THR_LOAD);
+        printf("  thr_pmul          %d\n", MR_THR_PMUL);
+        printf("  thr_add_          %d\n", MR_THR_ADD);
+        printf("  thr_select_win    %d\n", MR_THR_SELECT_WIN);
+        printf("  thr_check         %d\n", MR_THR_CHECK);
+        printf("  thr_copy          %d\n", MR_THR_COPY);
+        printf("  sub_tile          %d\n", MR_SUB_TILE);
         printf("  progress_interval %d ms\n", MR_PROGRESS_INTERVAL_MS);
 #ifdef MR_ADVANCED_MONITOR
         printf("  advanced_monitor  ON\n");
@@ -320,12 +357,14 @@ int main(int argc, char *argv[])
         printf("\n");
     }
 
-    if (run_bench || run_bench_long) {
+    if (run_bench || run_bench_long)
+    {
         run_bench_ops(run_bench_long);
         return 0;
     }
 
-    if (run_tests && !input_file) {
+    if (run_tests && !input_file)
+    {
         run_correctness_tests();
         run_known_prime_tests();
         run_general_s_prime_tests();
@@ -333,28 +372,35 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-    if (!input_file) {
+    if (!input_file)
+    {
         fprintf(stderr,
-            "Usage: %s [--test] [--report] [--progress] [--config]"
-            " [--bench-ops] [--bench-ops-long] [--cpu] <input.txt>\n", argv[0]);
+                "Usage: %s [--test] [--report] [--progress] [--config]"
+                " [--bench-ops] [--bench-ops-long] [--cpu] <input.txt>\n",
+                argv[0]);
         return 1;
     }
 
     // ── Load & build candidates ───────────────────────────────────────────────
     std::vector<GroupCandidate> groups;
-    try {
+    try
+    {
         groups = parse_input(input_file);
-    } catch (const std::exception &e) {
+    }
+    catch (const std::exception &e)
+    {
         fprintf(stderr, "Error reading input: %s\n", e.what());
         return 1;
     }
-    if (groups.empty()) {
+    if (groups.empty())
+    {
         fprintf(stderr, "No candidates found in %s\n", input_file);
         return 1;
     }
 
     // ── CPU mode: GMP Miller-Rabin, no GPU, no batching ──────────────────────
-    if (cpu_mode) {
+    if (cpu_mode)
+    {
         run_cpu_mode(groups, show_report);
         return 0;
     }
@@ -368,10 +414,14 @@ int main(int argc, char *argv[])
     // Compute n_limbs per group (may differ if equations produce different-sized numbers)
     printf("Building candidates (GMP)...\n");
     fflush(stdout);
-    for (auto &g : groups) {
-        try {
+    for (auto &g : groups)
+    {
+        try
+        {
             g.build();
-        } catch (const std::exception &e) {
+        }
+        catch (const std::exception &e)
+        {
             fprintf(stderr, "Error building group \"%s\": %s\n", g.label.c_str(), e.what());
             return 1;
         }
@@ -382,14 +432,16 @@ int main(int argc, char *argv[])
     {
         // Just a summary print — actual per-group n_limbs used in batching below.
         int total_eqs = 0;
-        for (auto &g : groups) total_eqs += (int)g.equations.size();
+        for (auto &g : groups)
+            total_eqs += (int)g.equations.size();
         printf("Groups: %d  total equations: %d  max rounds: %d\n",
                n_groups, total_eqs, max_rounds);
         printf("Batch size: %d  witnesses: %d\n\n", BATCH_SIZE, (int)DEFAULT_WITNESSES.size());
     }
 
     // Correctness tests (uses the first batch of the first group)
-    if (run_tests) {
+    if (run_tests)
+    {
         auto &g0 = groups[0];
         int bsz_test = std::min((int)g0.cands.size(), BATCH_SIZE);
         std::vector<NumberCandidate *> test_cands;
@@ -414,36 +466,38 @@ int main(int argc, char *argv[])
     auto t_global = hrc::now();
     std::vector<bool> alive(n_groups, true);
 
-    for (int round = 0; round < max_rounds; round++) {
+    for (int round = 0; round < max_rounds; round++)
+    {
         // Collect groups that still have a candidate for this round
         std::vector<int> active;
         for (int gi = 0; gi < n_groups; gi++)
             if (alive[gi] && round < (int)groups[gi].cands.size())
                 active.push_back(gi);
 
-        if (active.empty()) break;
+        if (active.empty())
+            break;
 
         // Sort active groups by n_limbs (descending) so that candidates of the same
         // size cluster together within each BATCH_SIZE chunk.  When a chunk contains
         // groups of different sizes the batch is normalised to the largest n_limbs in
         // that chunk: smaller candidates are zero-padded, which is safe because
         // pack_batch zero-initialises the output buffer before copying the limbs.
-        std::sort(active.begin(), active.end(), [&](int a, int b) {
-            return groups[a].n_limbs > groups[b].n_limbs;
-        });
+        std::sort(active.begin(), active.end(), [&](int a, int b)
+                  { return groups[a].n_limbs > groups[b].n_limbs; });
 
         printf("\n=== Round %d (%d groups active) ===\n", round + 1, (int)active.size());
         fflush(stdout);
         auto t_round = hrc::now();
         int survivors_this_round = 0;
 
-        int total     = (int)active.size();
+        int total = (int)active.size();
         int n_batches = (total + BATCH_SIZE - 1) / BATCH_SIZE;
 
-        for (int b = 0; b < n_batches; b++) {
+        for (int b = 0; b < n_batches; b++)
+        {
             int bstart = b * BATCH_SIZE;
-            int bend   = std::min(bstart + BATCH_SIZE, total);
-            int bsz    = bend - bstart;
+            int bend = std::min(bstart + BATCH_SIZE, total);
+            int bsz = bend - bstart;
 
             // Determine the widest n_limbs in this chunk — all others are zero-padded.
             int batch_n_limbs = 0;
@@ -452,8 +506,9 @@ int main(int argc, char *argv[])
                     batch_n_limbs = groups[active[k]].n_limbs;
 
             std::vector<NumberCandidate *> batch_cands;
-            std::vector<int>               batch_gidx;
-            for (int k = bstart; k < bend; k++) {
+            std::vector<int> batch_gidx;
+            for (int k = bstart; k < bend; k++)
+            {
                 int gi = active[k];
                 batch_cands.push_back(&groups[gi].cands[round]);
                 batch_gidx.push_back(gi);
@@ -465,37 +520,50 @@ int main(int argc, char *argv[])
             auto results = test_batch(batch_cands, batch_n_limbs, label_buf,
                                       show_report, show_progress);
 
-            for (int k = 0; k < bsz; k++) {
+            for (int k = 0; k < bsz; k++)
+            {
                 int gi = batch_gidx[k];
-                if (!results[k]) {
+                if (!results[k])
+                {
                     alive[gi] = false; // composite — eliminate group
-                } else {
+                }
+                else
+                {
                     survivors_this_round++;
                 }
             }
         }
 
         double t_r = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         hrc::now() - t_round).count() / 1000.0;
+                         hrc::now() - t_round)
+                         .count() /
+                     1000.0;
         int eliminated = (int)active.size() - survivors_this_round;
         printf("Round %d: %.2fs  —  %d survived, %d eliminated\n",
                round + 1, t_r, survivors_this_round, eliminated);
     }
 
     double total = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       hrc::now() - t_global).count() / 1000.0;
+                       hrc::now() - t_global)
+                       .count() /
+                   1000.0;
 
     // ── Results ───────────────────────────────────────────────────────────────
     printf("\n=== Results ===\n");
     int n_winners = 0;
-    for (int gi = 0; gi < n_groups; gi++) {
-        if (alive[gi]) {
+    for (int gi = 0; gi < n_groups; gi++)
+    {
+        if (alive[gi])
+        {
             n_winners++;
             auto &g = groups[gi];
-            if (g.label.empty() || g.label.rfind("__auto_", 0) == 0) {
+            if (g.label.empty() || g.label.rfind("__auto_", 0) == 0)
+            {
                 // Singleton group without an explicit label
                 printf("  PRIME: %s\n", g.equations[0].c_str());
-            } else {
+            }
+            else
+            {
                 printf("  PRIME group [%s]:\n", g.label.c_str());
                 for (auto &eq : g.equations)
                     printf("    %s\n", eq.c_str());

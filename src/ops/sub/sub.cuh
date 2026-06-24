@@ -26,7 +26,7 @@ namespace ops
 
     // out[cand*out_limbs + j] = (j < W) ? r[cand*W + j] : 0 — copies low limbs.
     void copy_low(LimbT *out, const LimbT *r, int out_limbs, int W,
-                  int n_batch, int thr, cudaStream_t s);
+                  int n_batch, cudaStream_t s);
 
     // number of tiles for a width W (= grid.x of the phases; sizes the buffers).
     int sub_n_tiles(int W);
