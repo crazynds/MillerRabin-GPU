@@ -33,6 +33,19 @@ std::vector<bool> gpu_miller_rabin_s1(
     bool show_report = false,
     bool show_progress = false);
 
+// Tests one sub-batch of sub_bsz candidates with a single witness.
+// Returns a passed[] vector of size sub_bsz.
+// Used by the lazy-build driver in bench_mr_gpu to avoid building all candidates upfront.
+std::vector<bool> gpu_test_witness(
+    std::vector<uint64_t> &N_sub,
+    std::vector<uint64_t> &exp_sub,
+    std::vector<uint64_t> &Nm1_sub,
+    int n_limbs,
+    int sub_bsz,
+    int s,
+    uint32_t witness,
+    bool show_progress = false);
+
 // General version: N-1 = 2^s * d.
 // Compacts dead candidates between witnesses so the GPU batch shrinks.
 std::vector<bool> gpu_miller_rabin(

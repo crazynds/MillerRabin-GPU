@@ -246,7 +246,8 @@ int main(int argc, char *argv[])
         fflush(stdout);
         auto t_round = hrc::now();
 
-        // Build all LazyCandidate for this round, find max n_limbs
+        // Build LazyCandidate stubs for this round; evaluate mpz (fast) to find max n_limbs.
+        // Limb arrays are NOT built yet — only computed on demand per sub-batch below.
         std::vector<LazyCandidate> lcs(n_active);
         int batch_n_limbs = 0;
         for (int k = 0; k < n_active; k++)
@@ -255,40 +256,72 @@ int main(int argc, char *argv[])
             lcs[k].equation  = groups[gi].equations[round];
             lcs[k].group_idx = gi;
             lcs[k].round_idx = round;
-            int nl = lcs[k].natural_n_limbs();
+            int nl = lcs[k].natural_n_limbs();   // mpz eval only, no limb build
             if (nl > batch_n_limbs) batch_n_limbs = nl;
         }
 
-        // Build all candidates at batch_n_limbs and detect max s
-        int s = 1;
-        std::vector<const NumberCandidate *> cands;
-        cands.reserve(n_active);
-        for (int k = 0; k < n_active; k++)
+        // Global witness sweep with lazy build.
+        // alive_idx[i] = index into lcs[] (and active[]).
+        // For each witness: test all alive candidates in sub-batches of BATCH_SIZE,
+        // building limbs for each sub-batch just before the GPU call.
+        std::vector<int> alive_idx(n_active);
+        for (int i = 0; i < n_active; i++) alive_idx[i] = i;
+
+        for (uint32_t w : DEFAULT_WITNESSES)
         {
-            const auto &nc = lcs[k].get(batch_n_limbs);
-            if (nc.s > s) s = nc.s;
-            cands.push_back(&nc);
+            if (alive_idx.empty()) break;
+
+            int n_alive = (int)alive_idx.size();
+            if (show_report)
+            {
+                printf("  [r%d] Witness %-3u  alive: %d\n", round + 1, w, n_alive);
+                fflush(stdout);
+            }
+
+            std::vector<bool> passed_this_witness(n_alive, false);
+
+            for (int start = 0; start < n_alive; start += BATCH_SIZE)
+            {
+                int sub_bsz = std::min(BATCH_SIZE, n_alive - start);
+
+                // Build limbs lazily — only for this sub-batch
+                int s = 1;
+                std::vector<const NumberCandidate *> sub_cands;
+                sub_cands.reserve(sub_bsz);
+                for (int i = 0; i < sub_bsz; i++)
+                {
+                    const auto &nc = lcs[alive_idx[start + i]].get(batch_n_limbs);
+                    if (nc.s > s) s = nc.s;
+                    sub_cands.push_back(&nc);
+                }
+
+                std::vector<uint64_t> N_sub, Nm1_sub, d_sub;
+                pack_batch(sub_cands, batch_n_limbs, N_sub, Nm1_sub, d_sub);
+
+                auto sub_res = gpu_test_witness(N_sub, d_sub, Nm1_sub,
+                                                batch_n_limbs, sub_bsz,
+                                                s, w, show_progress);
+                for (int i = 0; i < sub_bsz; i++)
+                    passed_this_witness[start + i] = sub_res[i];
+            }
+
+            // Global compact
+            std::vector<int> new_alive;
+            for (int i = 0; i < n_alive; i++)
+            {
+                if (passed_this_witness[i])
+                    new_alive.push_back(alive_idx[i]);
+                else if (show_report)
+                    printf("    [r%d] entry %d COMPOSITE (witness %u)\n",
+                           round + 1, alive_idx[i], w);
+            }
+            alive_idx = std::move(new_alive);
         }
 
-        // Pack into flat arrays
-        std::vector<uint64_t> N_all, Nm1_all, d_all;
-        pack_batch(cands, batch_n_limbs, N_all, Nm1_all, d_all);
-
-        char label_buf[64];
-        snprintf(label_buf, sizeof(label_buf), "r%d n=%d", round + 1, batch_n_limbs);
-
-        // Test ALL candidates at once; MR runner handles sub-batching internally
-        std::vector<bool> results;
-        if (s == 1)
-            results = gpu_miller_rabin_s1(N_all, d_all, Nm1_all, batch_n_limbs, n_active,
-                                          DEFAULT_WITNESSES, label_buf,
-                                          show_report, show_progress);
-        else
-            results = gpu_miller_rabin(N_all, d_all, Nm1_all, s, batch_n_limbs, n_active,
-                                       DEFAULT_WITNESSES, label_buf,
-                                       show_report, show_progress);
-
+        // Map survivors back to groups
         int survivors = 0;
+        std::vector<bool> results(n_active, false);
+        for (int idx : alive_idx) results[idx] = true;
         for (int k = 0; k < n_active; k++)
         {
             int gi = active[k];

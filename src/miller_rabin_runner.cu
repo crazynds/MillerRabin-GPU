@@ -161,6 +161,31 @@ static std::vector<uint8_t> run_one_witness_general(
     return passed;
 }
 
+// ── gpu_test_witness ──────────────────────────────────────────────────────────
+
+std::vector<bool> gpu_test_witness(
+        std::vector<uint64_t>& N_sub,
+        std::vector<uint64_t>& exp_sub,
+        std::vector<uint64_t>& Nm1_sub,
+        int n_limbs,
+        int sub_bsz,
+        int s,
+        uint32_t witness,
+        bool show_progress)
+{
+    PerfCtrs perf;
+    std::vector<uint8_t> raw;
+    if (s == 1)
+        raw = run_one_witness_s1(N_sub, exp_sub, Nm1_sub, n_limbs, sub_bsz,
+                                  witness, perf, show_progress);
+    else
+        raw = run_one_witness_general(N_sub, exp_sub, Nm1_sub, n_limbs, sub_bsz,
+                                       s, witness, perf, show_progress);
+    std::vector<bool> out(sub_bsz);
+    for (int i = 0; i < sub_bsz; i++) out[i] = raw[i] != 0;
+    return out;
+}
+
 // ── extract_sub_batch ─────────────────────────────────────────────────────────
 
 static void extract_sub_batch(
