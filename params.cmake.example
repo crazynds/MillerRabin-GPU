@@ -21,7 +21,7 @@ set(MR_MAXRREGCOUNT 0)
 
 # load_padded_batch: loads n_limbs coefficients into the NTT buffer (zero-padded
 # to `padded`). One thread per output coefficient; grid is 2D (batch × coeff).
-set(MR_THR_LOAD        256)
+set(MR_THR_LOAD        512)
 
 # pmul_batch / psq_batch: pointwise multiply or square in the NTT/FFT domain.
 # One thread per spectral coefficient; total elements = n_batch × padded.
@@ -34,19 +34,19 @@ set(MR_THR_ADD         256)
 
 # select_window_kernel: selects the precomputed power-table entry for each
 # candidate based on the current exponent window. One thread per limb.
-set(MR_THR_SELECT_WIN  256)
+set(MR_THR_SELECT_WIN  32)
 
 # check_equals_kernel: compares r against N-1 (or 1) to determine Miller-Rabin
 # pass/fail for each candidate. One thread per limb; result reduced via shared mem.
-set(MR_THR_CHECK       256)
+set(MR_THR_CHECK       64)
 
 # copy kernels (e.g. Montgomery/Barrett result copy-out). One thread per limb.
-set(MR_THR_COPY        128)
+set(MR_THR_COPY        512)
 
 # Inter-tile carry thread count for CARRY_ALG_MULTI_TILE phase 2.
 # One thread per candidate; processes the escaped tile-carries sequentially.
 # Low value is intentional: this phase is bandwidth-limited, not compute-limited.
-set(MR_CARRY_INTER_THR  32)
+set(MR_CARRY_INTER_THR  64)
 
 # ── Carry normalization algorithm ─────────────────────────────────────────────
 #
@@ -91,7 +91,7 @@ set(MR_ADVANCED_MONITOR OFF)
 # Larger (e.g. 20) → fewer limbs (faster) but product coefficients grow faster,
 # risking precision overflow sooner. Runtime guards in each backend validate safety.
 # Sane range: 4–30.
-set(LIMB_BITS 16)
+set(LIMB_BITS 20)
 
 # ── Big-integer multiplication algorithm ──────────────────────────────────────
 #

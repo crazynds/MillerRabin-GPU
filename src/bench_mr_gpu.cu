@@ -36,6 +36,9 @@
 #include <algorithm>
 #include <string>
 #include <map>
+#include <thread>
+#include <mutex>
+#include <atomic>
 #include <cuda_runtime.h>
 
 #include "candidate.cuh"
@@ -164,7 +167,9 @@ static std::pair<bool, double> cpu_test_equation(const std::string &equation)
 // Runs the round-based group testing on CPU (one candidate at a time, no batch).
 static void run_cpu_mode(
     std::vector<GroupCandidate> &groups,
-    bool show_report)
+    bool show_report,
+    bool show_progress,
+    bool cpu_parallel)
 {
     int n_groups = (int)groups.size();
     int max_rounds = 0;
@@ -172,18 +177,28 @@ static void run_cpu_mode(
         if ((int)g.equations.size() > max_rounds)
             max_rounds = (int)g.equations.size();
 
+    int n_threads = cpu_parallel
+                        ? (int)std::thread::hardware_concurrency()
+                        : 1;
+    if (n_threads < 1)
+        n_threads = 1;
+
     {
         int total_eqs = 0;
         for (auto &g : groups)
             total_eqs += (int)g.equations.size();
         printf("Groups: %d  total equations: %d  max rounds: %d\n",
                n_groups, total_eqs, max_rounds);
-        printf("CPU mode — Miller-Rabin (GMP)  witnesses: %d\n\n",
-               (int)DEFAULT_WITNESSES.size());
+        printf("CPU mode — Miller-Rabin (GMP)  witnesses: %d  threads: %d\n\n",
+               (int)DEFAULT_WITNESSES.size(), n_threads);
     }
 
     auto t_global = hrc::now();
     std::vector<bool> alive(n_groups, true);
+
+    // Global stats across all rounds for the final report
+    double global_t_min = 1e18, global_t_max = 0.0, global_t_sum = 0.0;
+    int global_n_tested = 0;
 
     for (int round = 0; round < max_rounds; round++)
     {
@@ -195,45 +210,108 @@ static void run_cpu_mode(
         if (active.empty())
             break;
 
-        printf("\n=== Round %d (%d groups active) ===\n", round + 1, (int)active.size());
+        int n_active = (int)active.size();
+        printf("\n=== Round %d (%d groups active) ===\n", round + 1, n_active);
         fflush(stdout);
         auto t_round = hrc::now();
-        int survivors_this_round = 0;
 
         double t_min = 1e18, t_max = 0.0, t_sum = 0.0;
         int n_tested = 0;
+        int survivors_this_round = 0;
 
-        for (int gi : active)
+        std::mutex print_mtx;
+        std::mutex stats_mtx;
+        std::atomic<int> work_idx{0};
+        // results: 1=prime, 0=composite, -1=not yet
+        std::vector<int> results(n_active, -1);
+
+        auto worker = [&]()
         {
-            const std::string &eq = groups[gi].equations[round];
-            auto [probably_prime, ms] = cpu_test_equation(eq);
-
-            t_sum += ms;
-            if (ms < t_min)
-                t_min = ms;
-            if (ms > t_max)
-                t_max = ms;
-            n_tested++;
-
-            if (show_report)
+            while (true)
             {
-                printf("  [%s] %7.1f ms  %s  %s\n",
-                       groups[gi].label.c_str(), ms,
-                       probably_prime ? "PROBABLY PRIME" : "composite     ",
-                       eq.c_str());
-            }
+                int idx = work_idx.fetch_add(1);
+                if (idx >= n_active)
+                    break;
 
-            if (!probably_prime)
-                alive[gi] = false;
-            else
-                survivors_this_round++;
+                int gi = active[idx];
+                const std::string &eq = groups[gi].equations[round];
+                const std::string &lbl = groups[gi].label;
+
+                if (show_progress)
+                {
+                    std::lock_guard<std::mutex> lk(print_mtx);
+                    printf("  [%d/%d] core %s testing [%s]: %s\n",
+                           idx + 1, n_active,
+                           cpu_parallel ? std::to_string(
+                                              (int)(std::hash<std::thread::id>{}(
+                                                        std::this_thread::get_id()) %
+                                                    (unsigned)n_threads))
+                                              .c_str()
+                                        : "0",
+                           lbl.empty() || lbl.rfind("__auto_", 0) == 0 ? "#" : lbl.c_str(),
+                           eq.c_str());
+                    fflush(stdout);
+                }
+
+                auto [probably_prime, ms] = cpu_test_equation(eq);
+                results[idx] = probably_prime ? 1 : 0;
+
+                {
+                    std::lock_guard<std::mutex> lk(stats_mtx);
+                    t_sum += ms;
+                    if (ms < t_min) t_min = ms;
+                    if (ms > t_max) t_max = ms;
+                    n_tested++;
+                }
+
+                if (show_report)
+                {
+                    std::lock_guard<std::mutex> lk(print_mtx);
+                    printf("  [%d/%d] [%s] %7.1f ms  %s  %s\n",
+                           idx + 1, n_active,
+                           lbl.empty() || lbl.rfind("__auto_", 0) == 0 ? "#" : lbl.c_str(),
+                           ms,
+                           probably_prime ? "PROBABLY PRIME" : "composite     ",
+                           eq.c_str());
+                    fflush(stdout);
+                }
+            }
+        };
+
+        if (n_threads > 1)
+        {
+            std::vector<std::thread> threads;
+            threads.reserve(n_threads);
+            for (int t = 0; t < n_threads; t++)
+                threads.emplace_back(worker);
+            for (auto &th : threads)
+                th.join();
         }
+        else
+        {
+            worker();
+        }
+
+        // Apply results
+        for (int idx = 0; idx < n_active; idx++)
+        {
+            if (results[idx] == 1)
+                survivors_this_round++;
+            else
+                alive[active[idx]] = false;
+        }
+
+        // Accumulate global stats
+        global_t_sum += t_sum;
+        global_n_tested += n_tested;
+        if (t_min < global_t_min) global_t_min = t_min;
+        if (t_max > global_t_max) global_t_max = t_max;
 
         double t_r = std::chrono::duration_cast<std::chrono::milliseconds>(
                          hrc::now() - t_round)
                          .count() /
                      1000.0;
-        int eliminated = (int)active.size() - survivors_this_round;
+        int eliminated = n_active - survivors_this_round;
         double t_avg = n_tested > 0 ? t_sum / n_tested : 0.0;
         printf("Round %d: %.2fs  —  %d survived, %d eliminated"
                "  |  min %.1fms  avg %.1fms  max %.1fms\n",
@@ -270,6 +348,17 @@ static void run_cpu_mode(
         printf("  No group passed all rounds.\n");
 
     printf("Total time: %.2fs\n", total_s);
+
+    if (show_report && global_n_tested > 0)
+    {
+        double g_avg = global_t_sum / global_n_tested;
+        printf("\n=== CPU Report ===\n");
+        printf("  Iterations : %d\n", global_n_tested);
+        printf("  Total time : %.2fs\n", total_s);
+        printf("  Avg / iter : %.2f ms\n", g_avg);
+        printf("  Min / iter : %.2f ms\n", global_t_min);
+        printf("  Max / iter : %.2f ms\n", global_t_max);
+    }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -283,6 +372,7 @@ int main(int argc, char *argv[])
     bool run_bench_long = false;
     bool show_config = false;
     bool cpu_mode = false;
+    bool cpu_parallel = false;
     const char *input_file = nullptr;
 
     for (int i = 1; i < argc; i++)
@@ -302,6 +392,11 @@ int main(int argc, char *argv[])
             show_config = true;
         else if (a == "--cpu")
             cpu_mode = true;
+        else if (a == "--cpu-parallel")
+        {
+            cpu_mode = true;
+            cpu_parallel = true;
+        }
         else if (!input_file)
             input_file = argv[i];
     }
@@ -376,7 +471,7 @@ int main(int argc, char *argv[])
     {
         fprintf(stderr,
                 "Usage: %s [--test] [--report] [--progress] [--config]"
-                " [--bench-ops] [--bench-ops-long] [--cpu] <input.txt>\n",
+                " [--bench-ops] [--bench-ops-long] [--cpu] [--cpu-parallel] <input.txt>\n",
                 argv[0]);
         return 1;
     }
@@ -401,7 +496,7 @@ int main(int argc, char *argv[])
     // ── CPU mode: GMP Miller-Rabin, no GPU, no batching ──────────────────────
     if (cpu_mode)
     {
-        run_cpu_mode(groups, show_report);
+        run_cpu_mode(groups, show_report, show_progress, cpu_parallel);
         return 0;
     }
 

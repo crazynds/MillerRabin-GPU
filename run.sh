@@ -14,6 +14,20 @@ case "${1:-}" in
     prof)
         exec "$BINARY" --bench-ops-long
         ;;
+    cpu)
+        if [[ ! -f "$INPUT" ]]; then
+            echo "Input file not found: $INPUT" >&2
+            exit 1
+        fi
+        exec "$BINARY" --cpu --progress --report "$INPUT"
+        ;;
+    cpu-parallel)
+        if [[ ! -f "$INPUT" ]]; then
+            echo "Input file not found: $INPUT" >&2
+            exit 1
+        fi
+        exec "$BINARY" --cpu-parallel --progress --report "$INPUT"
+        ;;
     "")
         if [[ ! -f "$INPUT" ]]; then
             echo "Input file not found: $INPUT" >&2
@@ -22,7 +36,7 @@ case "${1:-}" in
         exec "$BINARY" --progress --report "$INPUT"
         ;;
     *)
-        echo "Usage: $0 [test|prof]" >&2
+        echo "Usage: $0 [test|prof|cpu|cpu-parallel]" >&2
         exit 1
         ;;
 esac
