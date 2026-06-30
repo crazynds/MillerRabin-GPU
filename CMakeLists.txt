@@ -133,6 +133,9 @@ add_executable(bench_mr_gpu
     ${SRC_DIR}/bench_mr_gpu.cu
     ${SRC_DIR}/helpers/bench_ops.cu
     ${SRC_DIR}/miller_rabin_runner.cu
+    ${SRC_DIR}/input_parser.cu
+    ${SRC_DIR}/cpu_runner.cu
+    ${SRC_DIR}/mr_internals.cu
     ${MUL_BACKEND_SRC}
     ${SRC_DIR}/ops/carry/carry_norm.cu
     ${SRC_DIR}/ops/shift/shift.cu

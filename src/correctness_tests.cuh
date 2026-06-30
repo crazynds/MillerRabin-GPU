@@ -861,8 +861,7 @@ static void run_known_prime_tests()
 
     printf("  n_limbs=%d  NTT padded=%d\n", n_limbs, next_pow2_ntt(2 * n_limbs));
 
-    BatchModCtx mont(N_all, n_limbs, nb);
-    auto alive = gpu_miller_rabin_s1(mont, d_all, Nm1_all, nb, DEFAULT_WITNESSES, "Mersenne");
+    auto alive = gpu_miller_rabin_s1(N_all, d_all, Nm1_all, n_limbs, nb, DEFAULT_WITNESSES, "Mersenne");
 
     printf("\n  Results:\n");
     int ok = 0, fail = 0;
@@ -981,9 +980,8 @@ static void run_general_s_prime_tests()
         NumberCandidate cand;
         cand.build_from_mpz(p, n_limbs);
 
-        BatchModCtx mont(cand.N_lims, n_limbs, 1);
-        auto alive = gpu_miller_rabin(mont, cand.d_lims, cand.Nm1_lims,
-                                      cand.s, 1, DEFAULT_WITNESSES, tgt.desc);
+        auto alive = gpu_miller_rabin(cand.N_lims, cand.d_lims, cand.Nm1_lims,
+                                      cand.s, n_limbs, 1, DEFAULT_WITNESSES, tgt.desc);
 
         bool passed = alive[0];
         printf("  [%s] result: %s\n\n", tgt.desc, passed ? "PRIME OK" : "FAILED (bug!)");
@@ -1060,9 +1058,8 @@ static void run_s1_nextprime_tests()
         NumberCandidate cand;
         cand.build_from_mpz(p, n_limbs);
 
-        BatchModCtx mont(cand.N_lims, n_limbs, 1);
-        auto alive = gpu_miller_rabin(mont, cand.d_lims, cand.Nm1_lims,
-                                      cand.s, 1, DEFAULT_WITNESSES, "s=1");
+        auto alive = gpu_miller_rabin(cand.N_lims, cand.d_lims, cand.Nm1_lims,
+                                      cand.s, n_limbs, 1, DEFAULT_WITNESSES, "s=1");
 
         bool passed = alive[0];
         printf("  [s=1 #%d] result: %s\n\n", found, passed ? "PRIME OK" : "FAILED (bug!)");

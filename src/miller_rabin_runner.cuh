@@ -5,12 +5,8 @@
 // gpu_miller_rabin:    general version for N-1 = 2^s * d, any s >= 1.
 
 #include "batch_mod_ctx.cuh"
-#include "config.h"
+#include "mr_internals.cuh"
 #include <vector>
-#define MR_WINDOW_SIZE (1 << MR_WINDOW_BITS)
-
-static constexpr int WINDOW_BITS = MR_WINDOW_BITS;
-static constexpr int WINDOW_SIZE = MR_WINDOW_SIZE;
 
 inline const std::vector<uint32_t> DEFAULT_WITNESSES = {
     2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53};
@@ -24,11 +20,13 @@ __global__ void select_window_kernel(
     int, int, int, int);
 
 // For numbers where N-1 = 2*d (s=1).
-// exp_all: d = (N-1)/2, flat [n_total * n_limbs].
+// N_all: flat [n_total * n_limbs] moduli. exp_all: d = (N-1)/2.
+// Compacts dead candidates between witnesses so the GPU batch shrinks.
 std::vector<bool> gpu_miller_rabin_s1(
-    BatchModCtx &mont,
+    const std::vector<uint64_t> &N_all,
     const std::vector<uint64_t> &exp_all,
     const std::vector<uint64_t> &Nm1_all,
+    int n_limbs,
     int n_total,
     const std::vector<uint32_t> &witnesses,
     const char *label,
@@ -36,12 +34,13 @@ std::vector<bool> gpu_miller_rabin_s1(
     bool show_progress = false);
 
 // General version: N-1 = 2^s * d.
-// exp_all: d (odd), s: number of factors of 2 in N-1.
+// Compacts dead candidates between witnesses so the GPU batch shrinks.
 std::vector<bool> gpu_miller_rabin(
-    BatchModCtx &mont,
+    const std::vector<uint64_t> &N_all,
     const std::vector<uint64_t> &exp_all,
     const std::vector<uint64_t> &Nm1_all,
     int s,
+    int n_limbs,
     int n_total,
     const std::vector<uint32_t> &witnesses,
     const char *label,

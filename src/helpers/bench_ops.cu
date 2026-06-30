@@ -468,14 +468,20 @@ static BenchResult bench_gpu_mr(int n_bits, bool is_last)
     BenchResult res = {};
     try
     {
-        BatchModCtx ctx(nums, 0);
-        int nl = ctx.n_limbs;
+        // Use a temporary context just to determine n_limbs
+        int nl;
+        {
+            BatchModCtx tmp(nums, 0);
+            nl = tmp.n_limbs;
+        }
 
-        // Prepares exp_all = d = (N-1)/2 and Nm1_all = N-1
+        // Build N_all, exp_all = d = (N-1)/2, Nm1_all = N-1
+        std::vector<uint64_t> N_all((size_t)N_BATCH * nl, 0);
         std::vector<uint64_t> exp_all((size_t)N_BATCH * nl, 0);
         std::vector<uint64_t> Nm1_all((size_t)N_BATCH * nl, 0);
         for (int i = 0; i < N_BATCH; i++)
         {
+            mpz_to_limbs16(N_all.data() + (size_t)i * nl, nl, ((__mpz_struct *)*nums[i]));
             mpz_t Nm1, d;
             mpz_init(Nm1);
             mpz_init(d);
@@ -493,7 +499,7 @@ static BenchResult bench_gpu_mr(int n_bits, bool is_last)
         double elapsed = 0;
         do
         {
-            gpu_miller_rabin_s1(ctx, exp_all, Nm1_all, N_BATCH, witnesses, "bench", false, false);
+            gpu_miller_rabin_s1(N_all, exp_all, Nm1_all, nl, N_BATCH, witnesses, "bench", false, false);
             rounds++;
             elapsed = dsec(hrc::now() - t0).count();
         } while (elapsed < BENCH_SECS || (is_last && rounds < 1));
