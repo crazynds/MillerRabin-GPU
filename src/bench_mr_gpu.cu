@@ -39,6 +39,8 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <pthread.h>
+#include <sched.h>
 #include <cuda_runtime.h>
 
 #include "candidate.cuh"
@@ -169,7 +171,7 @@ static void run_cpu_mode(
     std::vector<GroupCandidate> &groups,
     bool show_report,
     bool show_progress,
-    bool cpu_parallel)
+    int n_threads)          // 1 = serial; >1 = parallel with core affinity
 {
     int n_groups = (int)groups.size();
     int max_rounds = 0;
@@ -177,11 +179,7 @@ static void run_cpu_mode(
         if ((int)g.equations.size() > max_rounds)
             max_rounds = (int)g.equations.size();
 
-    int n_threads = cpu_parallel
-                        ? (int)std::thread::hardware_concurrency()
-                        : 1;
-    if (n_threads < 1)
-        n_threads = 1;
+    if (n_threads < 1) n_threads = 1;
 
     {
         int total_eqs = 0;
@@ -280,10 +278,19 @@ static void run_cpu_mode(
 
         if (n_threads > 1)
         {
+            int n_cores = (int)std::thread::hardware_concurrency();
             std::vector<std::thread> threads;
             threads.reserve(n_threads);
             for (int t = 0; t < n_threads; t++)
+            {
                 threads.emplace_back(worker);
+                // Bind each thread to a distinct core (wraps around if n_threads > n_cores).
+                cpu_set_t cpuset;
+                CPU_ZERO(&cpuset);
+                CPU_SET(t % n_cores, &cpuset);
+                pthread_setaffinity_np(threads.back().native_handle(),
+                                       sizeof(cpu_set_t), &cpuset);
+            }
             for (auto &th : threads)
                 th.join();
         }
@@ -372,7 +379,7 @@ int main(int argc, char *argv[])
     bool run_bench_long = false;
     bool show_config = false;
     bool cpu_mode = false;
-    bool cpu_parallel = false;
+    int  cpu_threads = 0;   // 0 = auto (1 for --cpu, all cores for --cpu-parallel)
     const char *input_file = nullptr;
 
     for (int i = 1; i < argc; i++)
@@ -395,7 +402,13 @@ int main(int argc, char *argv[])
         else if (a == "--cpu-parallel")
         {
             cpu_mode = true;
-            cpu_parallel = true;
+            if (cpu_threads == 0)
+                cpu_threads = (int)std::thread::hardware_concurrency();
+        }
+        else if ((a == "--threads" || a == "-j") && i + 1 < argc)
+        {
+            cpu_threads = std::max(1, atoi(argv[++i]));
+            cpu_mode = true;
         }
         else if (!input_file)
             input_file = argv[i];
@@ -471,7 +484,8 @@ int main(int argc, char *argv[])
     {
         fprintf(stderr,
                 "Usage: %s [--test] [--report] [--progress] [--config]"
-                " [--bench-ops] [--bench-ops-long] [--cpu] [--cpu-parallel] <input.txt>\n",
+                " [--bench-ops] [--bench-ops-long] [--cpu] [--cpu-parallel]"
+                " [--threads N | -j N] <input.txt>\n",
                 argv[0]);
         return 1;
     }
@@ -496,7 +510,8 @@ int main(int argc, char *argv[])
     // ── CPU mode: GMP Miller-Rabin, no GPU, no batching ──────────────────────
     if (cpu_mode)
     {
-        run_cpu_mode(groups, show_report, show_progress, cpu_parallel);
+        int n_threads = (cpu_threads > 0) ? cpu_threads : 1;
+        run_cpu_mode(groups, show_report, show_progress, n_threads);
         return 0;
     }
 
