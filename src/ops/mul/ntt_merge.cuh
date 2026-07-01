@@ -53,7 +53,10 @@ struct BigIntNTTBatch
     Data64 *d_buf_AB = nullptr;     // single allocation [2 * n_batch * padded]
     Data64 *d_buf_A = nullptr;      // points into d_buf_AB
     Data64 *d_buf_B = nullptr;      // points into d_buf_AB + n_batch * padded
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     Data64 *d_tile_carry = nullptr; // [n_batch * n_tiles] inter-tile carry
+    int    *d_first_tile = nullptr; // [n_batch] first tile with non-zero residual (n_tiles = none)
+#endif
 
     explicit BigIntNTTBatch(int n_limbs_, int n_batch_);
     ~BigIntNTTBatch();

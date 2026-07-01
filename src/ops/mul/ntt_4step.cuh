@@ -71,7 +71,10 @@ struct Ntt4StepBatch
     Data64 *d_buf_A = nullptr;  // = d_buf_AB
     Data64 *d_buf_B = nullptr;  // = d_buf_AB + n_batch*padded
     Data64 *d_scratch = nullptr; // [2 * n_batch * padded] — transpose ping-pong
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     Data64 *d_tile_carry = nullptr; // [n_batch * n_tiles]
+    int    *d_first_tile = nullptr; // [n_batch] first tile with non-zero residual (n_tiles = none)
+#endif
 
     explicit Ntt4StepBatch(int n_limbs_, int n_batch_);
     ~Ntt4StepBatch();

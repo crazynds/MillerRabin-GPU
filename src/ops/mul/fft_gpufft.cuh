@@ -42,7 +42,10 @@ struct FftGpuFftBatch
     Data64 *d_buf_B = nullptr;
     double *d_real = nullptr;     // [n_batch * padded] real coefficients (post-INTT, stride padded)
     Data64 *d_cplx_tmp = nullptr; // [n_batch * padded] complex (fwd_A staging)
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     Data64 *d_tile_carry = nullptr;
+    int    *d_first_tile = nullptr; // [n_batch] first tile with non-zero residual (n_tiles = none)
+#endif
 
     Complex64 *d_root_fwd = nullptr; // root table (forward)
     Complex64 *d_root_inv = nullptr; // root table (inverse)

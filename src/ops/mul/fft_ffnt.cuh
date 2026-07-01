@@ -49,7 +49,10 @@ struct FftFFNTBatch
     Data64 *d_buf_AB = nullptr; // [2*n_batch*padded] = transformed domain (temp) of A,B
     Data64 *d_buf_A = nullptr;
     Data64 *d_buf_B = nullptr;
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     Data64 *d_tile_carry = nullptr;
+    int    *d_first_tile = nullptr; // [n_batch] first tile with non-zero residual (n_tiles = none)
+#endif
     double *d_real = nullptr;   // [2*n_batch*fft_len] reals (FFNT I/O)
 
     Complex64 *d_root_fwd = nullptr;

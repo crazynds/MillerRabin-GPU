@@ -69,7 +69,7 @@ set(CARRY_NORM_ALG CARRY_ALG_SINGLE_TILE)
 
 # Threads per block (tile width) for SINGLE_TILE and MULTI_TILE carry kernels.
 # Each thread processes one limb. Must be a multiple of 32.
-set(MR_CARRY_TILE 32)
+set(MR_CARRY_TILE 512)
 
 # Tile width for cond_sub_batch (cs_phase1 + cs_apply kernels).
 # cs_phase1 scans MR_SUB_TILE limbs per block to determine the borrow chain;

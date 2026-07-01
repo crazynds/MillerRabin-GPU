@@ -170,9 +170,10 @@ FftCuFFTBatch::FftCuFFTBatch(int n_limbs_, int n_batch_)
     CU(cudaMalloc(&d_in, (size_t)2 * n_batch * fft_len * sizeof(double)));
     CU(cudaMalloc(&d_real, (size_t)n_batch * padded * sizeof(double)));
 
-#ifdef CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     int n_tiles_max = (padded + CARRY_TILE - 1) / CARRY_TILE;
     CU(cudaMalloc(&d_tile_carry, (size_t)n_batch * n_tiles_max * sizeof(Data64)));
+    CU(cudaMalloc(&d_first_tile, (size_t)n_batch * sizeof(int)));
 #endif
 
     // R2C / C2R plans via cufftPlanMany to control the per-candidate distance:
@@ -199,8 +200,9 @@ FftCuFFTBatch::~FftCuFFTBatch()
     cudaFree(d_buf_AB);
     cudaFree(d_in);
     cudaFree(d_real);
-#ifdef CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     cudaFree(d_tile_carry);
+    cudaFree(d_first_tile);
 #endif
 }
 

@@ -192,6 +192,7 @@ __global__ static void carry_intra_copy(
     T *__restrict__ d_dst,
     const T *__restrict__ d_src,
     Data64 *__restrict__ d_tile_carry,
+    int *__restrict__ d_first_tile,
     int n_dst, int n_src, int n_batch)
 {
     int cand = blockIdx.y, tile = blockIdx.x, tid = threadIdx.x;
@@ -199,6 +200,10 @@ __global__ static void carry_intra_copy(
         return;
 
     int n_tiles = (n_dst + CARRY_TILE - 1) / CARRY_TILE;
+    // Initialize sentinel: tile 0 thread 0 sets d_first_tile[cand] = n_tiles.
+    if (tile == 0 && tid == 0)
+        d_first_tile[cand] = n_tiles;
+
     int j_start = tile * CARRY_TILE;
     int j = j_start + tid;
 
@@ -286,6 +291,7 @@ template <typename T>
 __global__ static void carry_propagate_tiles(
     T *__restrict__ d_dst,
     Data64 *__restrict__ d_tile_carry,
+    int *__restrict__ d_first_tile,
     int n, int n_batch)
 {
     int cand = blockIdx.y;
@@ -308,9 +314,15 @@ __global__ static void carry_propagate_tiles(
             c = v >> LIMB_BITS;
         }
     }
-    // c is now the residual that escapes tile t (and must enter tile t+1); store
+    // c is now the residual that escapes tile t and must enter tile t+1; store
     // it back into the slot we just consumed (0 when nothing escapes).
     d_tile_carry[cand * n_tiles + (t - 1)] = (Data64)c;
+    // Track the earliest tile that carry_inter_tiles needs to visit. Slot t-1
+    // feeds tile t+1; if t+1 == n_tiles it is the global overflow (out of range
+    // for carry_inter_tiles), but n_tiles is already the sentinel value so the
+    // atomicMin is harmless.
+    if (c != 0)
+        atomicMin(&d_first_tile[cand], t + 1);
 }
 
 // Phase 3 — sequential cleanup of the residual carries left by phase 2 (1 thread
@@ -318,11 +330,13 @@ __global__ static void carry_propagate_tiles(
 // escape, so the only carries left are the residuals in d_tile_carry, almost
 // always zero; this pass is the safety net for the rare multi-tile cascade. The
 // residual escaping tile t sits in d_tile_carry[t-1] and enters tile t+1, so tile
-// m consumes slot m-2.
+// m consumes slot m-2. d_first_tile[cand] holds the earliest m with a non-zero
+// residual (n_tiles if none), so most candidates exit immediately.
 template <typename T>
 __global__ static void carry_inter_tiles(
     T *__restrict__ d_dst,
     Data64 *__restrict__ d_tile_carry,
+    const int *__restrict__ d_first_tile,
     int n, int n_batch)
 {
     int cand = blockIdx.x * blockDim.x + threadIdx.x;
@@ -330,8 +344,12 @@ __global__ static void carry_inter_tiles(
         return;
 
     int n_tiles = (n + CARRY_TILE - 1) / CARRY_TILE;
+    int m_start = d_first_tile[cand];
+    if (m_start >= n_tiles)
+        return; // no residual carries for this candidate
+
     uint64_t r = 0; // running carry cascading across tiles in this cleanup pass
-    for (int m = 2; m < n_tiles; m++)
+    for (int m = m_start; m < n_tiles; m++)
     {
         uint64_t c = r + (uint64_t)d_tile_carry[cand * n_tiles + (m - 2)];
         r = 0;
@@ -738,12 +756,14 @@ void Multiplier::carry_to_limbs(LimbT *d_out, int n_out, cudaStream_t s)
     int n_tiles = (n_out + CARRY_TILE - 1) / CARRY_TILE;
     int inter_blk = (n_batch + THR - 1) / THR;
     carry_intra_copy<<<dim3(n_tiles, n_batch), CARRY_TILE, 0, s>>>(
-        d_out, raw, d_tile_carry, n_out, padded, n_batch);
+        d_out, raw, d_tile_carry, d_first_tile, n_out, padded, n_batch);
     if (n_tiles > 1)
+    {
         carry_propagate_tiles<<<dim3((n_tiles - 1 + THR - 1) / THR, n_batch), THR, 0, s>>>(
-            d_out, d_tile_carry, n_out, n_batch);
-    carry_inter_tiles<<<inter_blk, THR, 0, s>>>(
-        d_out, d_tile_carry, n_out, n_batch);
+            d_out, d_tile_carry, d_first_tile, n_out, n_batch);
+        carry_inter_tiles<<<inter_blk, THR, 0, s>>>(
+            d_out, d_tile_carry, d_first_tile, n_out, n_batch);
+    }
 
 #elif CARRY_NORM_ALG == CARRY_ALG_SINGLE_TILE
     carry_16bits<<<n_batch, CARRY_TILE, 0, s>>>(raw, d_out, n_out, padded, n_batch);
@@ -764,12 +784,14 @@ void Multiplier::carry_after_vadd(LimbT *d_dst, int n_dst, cudaStream_t s)
     int n_tiles = (n_dst + CARRY_TILE - 1) / CARRY_TILE;
     int inter_blk = (n_batch + THR - 1) / THR;
     carry_intra_copy<<<dim3(n_tiles, n_batch), CARRY_TILE, 0, s>>>(
-        d_dst, d_dst, d_tile_carry, n_dst, n_dst, n_batch);
+        d_dst, d_dst, d_tile_carry, d_first_tile, n_dst, n_dst, n_batch);
     if (n_tiles > 1)
+    {
         carry_propagate_tiles<<<dim3((n_tiles - 1 + THR - 1) / THR, n_batch), THR, 0, s>>>(
-            d_dst, d_tile_carry, n_dst, n_batch);
-    carry_inter_tiles<<<inter_blk, THR, 0, s>>>(
-        d_dst, d_tile_carry, n_dst, n_batch);
+            d_dst, d_tile_carry, d_first_tile, n_dst, n_batch);
+        carry_inter_tiles<<<inter_blk, THR, 0, s>>>(
+            d_dst, d_tile_carry, d_first_tile, n_dst, n_batch);
+    }
 #elif CARRY_NORM_ALG == CARRY_ALG_SINGLE_TILE
     carry_16bits<<<n_batch, CARRY_TILE, 0, s>>>(d_dst, d_dst, n_dst, n_dst, n_batch);
 #elif CARRY_NORM_ALG == CARRY_ALG_PREFIX_SCAN
@@ -801,13 +823,15 @@ void Multiplier::add_and_carry(LimbT *d_a, const LimbT *d_b, int n, int n_passes
         d_a, d_a, d_b, n, n_batch);
     int n_tiles = (n + CARRY_TILE - 1) / CARRY_TILE;
     carry_intra_copy<<<dim3(n_tiles, n_batch), CARRY_TILE, 0, s>>>(
-        d_a, d_a, d_tile_carry, n, n, n_batch);
+        d_a, d_a, d_tile_carry, d_first_tile, n, n, n_batch);
     int inter_blk = (n_batch + MR_CARRY_INTER_THR - 1) / MR_CARRY_INTER_THR;
     if (n_tiles > 1)
+    {
         carry_propagate_tiles<<<dim3((n_tiles - 1 + MR_CARRY_INTER_THR - 1) / MR_CARRY_INTER_THR, n_batch), MR_CARRY_INTER_THR, 0, s>>>(
-            d_a, d_tile_carry, n, n_batch);
-    carry_inter_tiles<<<inter_blk, MR_CARRY_INTER_THR, 0, s>>>(
-        d_a, d_tile_carry, n, n_batch);
+            d_a, d_tile_carry, d_first_tile, n, n_batch);
+        carry_inter_tiles<<<inter_blk, MR_CARRY_INTER_THR, 0, s>>>(
+            d_a, d_tile_carry, d_first_tile, n, n_batch);
+    }
 
 #elif CARRY_NORM_ALG == CARRY_ALG_SINGLE_TILE
     constexpr int THR = MR_THR_ADD;

@@ -64,8 +64,9 @@ struct FftCuFFTBatch
     Data64 *d_buf_B = nullptr;  // = d_buf_AB + n_batch*padded
     double *d_in = nullptr;     // [2 * n_batch * fft_len] real input (distance fft_len)
     double *d_real = nullptr;   // [n_batch * padded] real output (raw_coeffs(), stride padded)
-#ifdef CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     Data64 *d_tile_carry = nullptr;
+    int    *d_first_tile = nullptr; // [n_batch] first tile with non-zero residual (n_tiles = none)
 #endif
 
     cufftHandle plan_r2c_n = 0;  // D2Z batch = n_batch

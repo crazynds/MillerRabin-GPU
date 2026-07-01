@@ -402,5 +402,53 @@ void print_perf_accumulated(const PerfCtrs& perf, PerfNode& tree)
 
     printf("\n  Application breakdown (accumulated across all sub-batches):\n");
     print_perf_tree(tree);
+
+    // ── By kernel type (same logic as BatchModCtx::print_perf) ───────────────
+    auto collect_leaves = [](const PerfNode& n, std::vector<std::pair<std::string,double>>& out) {
+        std::function<void(const PerfNode&)> walk = [&](const PerfNode& nd) {
+            if (nd.children.empty()) { out.push_back({nd.name, nd.ms}); return; }
+            for (auto& c : nd.children) walk(*c);
+        };
+        walk(n);
+    };
+    auto has = [](const std::string& s, const char* sub) {
+        return s.find(sub) != std::string::npos;
+    };
+
+    std::vector<std::pair<std::string,double>> leaves;
+    for (auto& c : tree.children)
+        if (c->name == "mul" || c->name == "sq")
+            collect_leaves(*c, leaves);
+
+    double ntt_t=0, pw_t=0, carry_t=0, shift_t=0, vadd_t=0, sub_t=0, copy_t=0, cs_t=0;
+    for (auto& lv : leaves) {
+        const std::string& nm = lv.first;
+        double ms = lv.second;
+        if      (has(nm,"carry"))              carry_t += ms;
+        else if (has(nm,"pmul")||has(nm,"psq")) pw_t   += ms;
+        else if (has(nm,"ntt"))                ntt_t   += ms;
+        else if (has(nm,"vadd"))               vadd_t  += ms;
+        else if (has(nm,"shift"))              shift_t += ms;
+        else if (has(nm,"copy"))               copy_t  += ms;
+        else if (has(nm,"cond_sub"))           cs_t    += ms;
+        else if (has(nm,"sub"))                sub_t   += ms;
+    }
+    double tree_total = tree.total_ms();
+    auto tp = [&](double v) { return tree_total > 0 ? v*100.0/tree_total : 0.0; };
+    auto crow = [&](const char* name, double ms) {
+        if (ms > 0)
+            printf("     %-22s %12s  %5.1f%%\n", name,
+                   fmt_time_ms((float)ms).c_str(), tp(ms));
+    };
+    printf("\n  by kernel type (accumulated):\n");
+    crow("NTT/INTT",         ntt_t);
+    crow("pointwise (pmul)", pw_t);
+    crow("carry",            carry_t);
+    crow("shift",            shift_t);
+    crow("sum (vadd)",       vadd_t);
+    crow("sub (T-qn)",       sub_t);
+    crow("cond_sub",         cs_t);
+    crow("copy_out",         copy_t);
+
     carry_stats_print_and_reset();
 }

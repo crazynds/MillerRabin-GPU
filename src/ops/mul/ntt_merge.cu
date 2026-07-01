@@ -71,15 +71,18 @@ BigIntNTTBatch::BigIntNTTBatch(int n_limbs_, int n_batch_)
 
     const size_t tbytes = fwd_h.size() * sizeof(Root64);
     const size_t pbytes = (size_t)n_batch * padded * sizeof(Data64);
-    int n_tiles_max = (padded + CARRY_TILE - 1) / CARRY_TILE;
-    const size_t tcbytes = (size_t)n_batch * n_tiles_max * sizeof(Data64);
-
     CU(cudaMalloc(&d_fwd_table, tbytes));
     CU(cudaMalloc(&d_inv_table, tbytes));
     CU(cudaMalloc(&d_buf_AB, 2 * pbytes));
     d_buf_A = d_buf_AB;
     d_buf_B = d_buf_AB + (size_t)n_batch * padded;
-    CU(cudaMalloc(&d_tile_carry, tcbytes));
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
+    {
+        int n_tiles_max = (padded + CARRY_TILE - 1) / CARRY_TILE;
+        CU(cudaMalloc(&d_tile_carry, (size_t)n_batch * n_tiles_max * sizeof(Data64)));
+        CU(cudaMalloc(&d_first_tile, (size_t)n_batch * sizeof(int)));
+    }
+#endif
 
     CU(cudaMemcpy(d_fwd_table, fwd_h.data(), tbytes, cudaMemcpyHostToDevice));
     CU(cudaMemcpy(d_inv_table, inv_h.data(), tbytes, cudaMemcpyHostToDevice));
@@ -90,7 +93,10 @@ BigIntNTTBatch::~BigIntNTTBatch()
     cudaFree(d_fwd_table);
     cudaFree(d_inv_table);
     cudaFree(d_buf_AB);
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     cudaFree(d_tile_carry);
+    cudaFree(d_first_tile);
+#endif
 }
 
 ntt_configuration<Data64> BigIntNTTBatch::make_cfg(type t, cudaStream_t s)

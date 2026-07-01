@@ -152,8 +152,11 @@ FftGpuFftBatch::FftGpuFftBatch(int n_limbs_, int n_batch_)
     d_buf_B = d_buf_AB + (size_t)n_batch * padded;
     CU(cudaMalloc(&d_real, (size_t)n_batch * padded * sizeof(double)));
     CU(cudaMalloc(&d_cplx_tmp, pb));
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     int n_tiles_max = (padded + CARRY_TILE - 1) / CARRY_TILE;
     CU(cudaMalloc(&d_tile_carry, (size_t)n_batch * n_tiles_max * sizeof(Data64)));
+    CU(cudaMalloc(&d_first_tile, (size_t)n_batch * sizeof(int)));
+#endif
 }
 
 FftGpuFftBatch::~FftGpuFftBatch()
@@ -163,7 +166,10 @@ FftGpuFftBatch::~FftGpuFftBatch()
     cudaFree(d_buf_AB);
     cudaFree(d_real);
     cudaFree(d_cplx_tmp);
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     cudaFree(d_tile_carry);
+    cudaFree(d_first_tile);
+#endif
 }
 
 // ── FFT (in-place via GPU_FFT, multiplication=false) ──────────────────────────

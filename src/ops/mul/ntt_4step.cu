@@ -179,8 +179,11 @@ Ntt4StepBatch::Ntt4StepBatch(int n_limbs_, int n_batch_)
     d_buf_B = d_buf_AB + (size_t)n_batch * padded;
     CU(cudaMalloc(&d_scratch, 2 * pb));
 
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     int n_tiles_max = (padded + CARRY_TILE - 1) / CARRY_TILE;
     CU(cudaMalloc(&d_tile_carry, (size_t)n_batch * n_tiles_max * sizeof(Data64)));
+    CU(cudaMalloc(&d_first_tile, (size_t)n_batch * sizeof(int)));
+#endif
 }
 
 Ntt4StepBatch::~Ntt4StepBatch()
@@ -195,7 +198,10 @@ Ntt4StepBatch::~Ntt4StepBatch()
     cudaFree(d_ninverse);
     cudaFree(d_buf_AB);
     cudaFree(d_scratch);
+#if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     cudaFree(d_tile_carry);
+    cudaFree(d_first_tile);
+#endif
 }
 
 // ── transforms (ping-pong) ──────────────────────────────────────────────────────
