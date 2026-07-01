@@ -158,7 +158,8 @@ BatchModCtx::~BatchModCtx()
 
 void BatchModCtx::perf_flush(cudaStream_t s)
 {
-    timer.flush(s);
+    if (perf_enabled)
+        timer.flush(s);
 }
 
 // Builds the subtree of one path (mul/sq) under perf_root and returns the root branch.

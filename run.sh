@@ -61,12 +61,16 @@ case "$MODE" in
             exec "$BINARY" --cpu-parallel --progress --report "$ACTIVE_INPUT"
         fi
         ;;
+    bench)
+        if [[ ! -f "$ACTIVE_INPUT" ]]; then echo "Input file not found: $ACTIVE_INPUT" >&2; exit 1; fi
+        exec "$BINARY" --progress "$ACTIVE_INPUT"
+        ;;
     "")
         if [[ ! -f "$ACTIVE_INPUT" ]]; then echo "Input file not found: $ACTIVE_INPUT" >&2; exit 1; fi
         exec "$BINARY" --progress --report "$ACTIVE_INPUT"
         ;;
     *)
-        echo "Usage: $0 [--big|--small] [test|prof|cpu|cpu-parallel [N_THREADS]]" >&2
+        echo "Usage: $0 [--big|--small] [test|prof|bench|cpu|cpu-parallel [N_THREADS]]" >&2
         exit 1
         ;;
 esac
