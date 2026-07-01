@@ -242,6 +242,36 @@ void window_exp_loop(
 
 // ── Prints performance report ─────────────────────────────────────────
 
+void print_perf_simple(const PerfCtrs& perf)
+{
+    float window_ms = perf.sq_ms + perf.mul_ms;
+    float total_ms  = window_ms + perf.check_ms + perf.setup_ms + perf.memcpy_ms + perf.table_ms;
+    auto pct = [&](float v) { return total_ms > 0 ? v*100.0f/total_ms : 0.0f; };
+
+    double memcpy_gb   = perf.memcpy_bytes / 1e9;
+    double memcpy_gbps = perf.memcpy_ms > 0 ? memcpy_gb / (perf.memcpy_ms / 1000.0) : 0.0;
+
+    printf("\n");
+    printf("╔══════════════════════════════════════════════════════════════╗\n");
+    printf("║  Time profile — WINDOW_BITS=%-2d                              ║\n", WINDOW_BITS);
+    printf("╚══════════════════════════════════════════════════════════════╝\n");
+    printf("  window loop (sq + mul)  %12s  %5.1f%%\n", fmt_time_ms(window_ms).c_str(), pct(window_ms));
+    printf("  ├─ squarings            %12s  %5.1f%%  (%ld sq,  %s/sq)\n",
+           fmt_time_ms(perf.sq_ms).c_str(), pct(perf.sq_ms), perf.sq_calls,
+           fmt_time_ms(perf.sq_calls > 0 ? perf.sq_ms/perf.sq_calls : 0.0).c_str());
+    printf("  └─ mul + select_win     %12s  %5.1f%%  (%ld win, %s/win)\n",
+           fmt_time_ms(perf.mul_ms).c_str(), pct(perf.mul_ms), perf.mul_calls,
+           fmt_time_ms(perf.mul_calls > 0 ? perf.mul_ms/perf.mul_calls : 0.0).c_str());
+    printf("  table pre-compute       %12s  %5.1f%%\n", fmt_time_ms(perf.table_ms).c_str(), pct(perf.table_ms));
+    printf("  CPU setup (to_mont)     %12s  %5.1f%%\n", fmt_time_ms(perf.setup_ms).c_str(), pct(perf.setup_ms));
+    printf("  check                   %12s  %5.1f%%\n", fmt_time_ms(perf.check_ms).c_str(), pct(perf.check_ms));
+    char gbps[32];
+    snprintf(gbps, sizeof(gbps), "(%.2f GB/s)", memcpy_gbps);
+    printf("  memcpy setup            %12s  %5.1f%%  %s\n", fmt_time_ms(perf.memcpy_ms).c_str(), pct(perf.memcpy_ms), gbps);
+    printf("  ──────────────────────  %12s\n", fmt_time_ms(total_ms).c_str());
+    carry_stats_print_and_reset();
+}
+
 void print_perf(const PerfCtrs& perf, BatchModCtx& mont)
 {
     float window_ms = perf.sq_ms + perf.mul_ms;
@@ -272,5 +302,105 @@ void print_perf(const PerfCtrs& perf, BatchModCtx& mont)
         {"memcpy setup", perf.memcpy_ms, gbps},
     };
     mont.print_perf(total_ms, host);
+    carry_stats_print_and_reset();
+}
+
+// ── merge_perf_tree ───────────────────────────────────────────────────────────
+// Merges src into dst: adds ms/calls for matching nodes (by position).
+// On first call (dst.children is empty) the tree structure is cloned from src.
+
+void merge_perf_tree(PerfNode& dst, const PerfNode& src)
+{
+    dst.ms    += src.ms;
+    dst.calls += src.calls;
+    if (src.children.empty()) return;
+
+    if (dst.children.empty()) {
+        for (auto& c : src.children) {
+            dst.children.push_back(std::make_unique<PerfNode>(c->name));
+            dst.children.back()->note = c->note;
+            merge_perf_tree(*dst.children.back(), *c);
+        }
+    } else {
+        for (size_t i = 0; i < src.children.size() && i < dst.children.size(); i++)
+            merge_perf_tree(*dst.children[i], *src.children[i]);
+    }
+}
+
+// ── print_perf_accumulated ────────────────────────────────────────────────────
+// Prints the full timing report: GPU kernel tree (accumulated across all
+// sub-batches/witnesses) annotated with host phases from PerfCtrs.
+
+void print_perf_accumulated(const PerfCtrs& perf, PerfNode& tree)
+{
+    float window_ms = perf.sq_ms + perf.mul_ms;
+    float total_ms  = window_ms + perf.check_ms + perf.setup_ms
+                    + perf.memcpy_ms + perf.table_ms;
+    auto pct = [&](float v) { return total_ms > 0 ? v*100.0f/total_ms : 0.0f; };
+
+    double memcpy_gb   = perf.memcpy_bytes / 1e9;
+    double memcpy_gbps = perf.memcpy_ms > 0
+                       ? memcpy_gb / (perf.memcpy_ms / 1000.0) : 0.0;
+
+    // ── Summary header (same as before) ──────────────────────────────────────
+    printf("\n");
+    printf("╔══════════════════════════════════════════════════════════════╗\n");
+    printf("║  Time profile — WINDOW_BITS=%-2d                              ║\n", WINDOW_BITS);
+    printf("╚══════════════════════════════════════════════════════════════╝\n");
+    printf("  window loop (sq + mul)  %12s  %5.1f%%\n",
+           fmt_time_ms(window_ms).c_str(), pct(window_ms));
+    printf("  ├─ squarings            %12s  %5.1f%%  (%ld sq,  %s/sq)\n",
+           fmt_time_ms(perf.sq_ms).c_str(), pct(perf.sq_ms), perf.sq_calls,
+           fmt_time_ms(perf.sq_calls > 0 ? perf.sq_ms/perf.sq_calls : 0.0f).c_str());
+    printf("  └─ mul + select_win     %12s  %5.1f%%  (%ld win, %s/win)\n",
+           fmt_time_ms(perf.mul_ms).c_str(), pct(perf.mul_ms), perf.mul_calls,
+           fmt_time_ms(perf.mul_calls > 0 ? perf.mul_ms/perf.mul_calls : 0.0f).c_str());
+    printf("  table pre-compute       %12s  %5.1f%%\n",
+           fmt_time_ms(perf.table_ms).c_str(), pct(perf.table_ms));
+    printf("  CPU setup (to_mont)     %12s  %5.1f%%\n",
+           fmt_time_ms(perf.setup_ms).c_str(), pct(perf.setup_ms));
+    printf("  check                   %12s  %5.1f%%\n",
+           fmt_time_ms(perf.check_ms).c_str(), pct(perf.check_ms));
+    {
+        char gbps[32];
+        snprintf(gbps, sizeof(gbps), "(%.2f GB/s)", memcpy_gbps);
+        printf("  memcpy setup            %12s  %5.1f%%  %s\n",
+               fmt_time_ms(perf.memcpy_ms).c_str(), pct(perf.memcpy_ms), gbps);
+    }
+    printf("  ──────────────────────  %12s\n", fmt_time_ms(total_ms).c_str());
+
+    // ── Inject host phases as a synthetic subtree
+    char gbps[32];
+    snprintf(gbps, sizeof(gbps), "(%.2f GB/s)", memcpy_gbps);
+    std::vector<BatchModCtx::HostPhase> host = {
+        {"table pre-compute",  perf.table_ms,  ""},
+        {"CPU setup (to_mont)", perf.setup_ms, ""},
+        {"check",              perf.check_ms,  ""},
+        {"memcpy setup",       perf.memcpy_ms, gbps},
+    };
+    if (!host.empty()) {
+        PerfNode* h = tree.branch("setup / host");
+        for (auto& hp : host) {
+            PerfNode* leaf = h->branch(hp.name);
+            leaf->ms    = hp.ms;
+            leaf->calls = 1;
+            leaf->note  = hp.note;
+        }
+    }
+
+    // "others (overhead)" = total measured by PerfCtrs minus GPU kernel tree
+    if (total_ms > 0.0) {
+        double gpu_tree_ms = 0.0;
+        for (auto& c : tree.children) gpu_tree_ms += c->total_ms();
+        double others = (double)total_ms - gpu_tree_ms;
+        if (others > 0.5) {
+            PerfNode* o = tree.branch("others (overhead)");
+            o->ms    = others;
+            o->calls = 1;
+        }
+    }
+
+    printf("\n  Application breakdown (accumulated across all sub-batches):\n");
+    print_perf_tree(tree);
     carry_stats_print_and_reset();
 }

@@ -9,7 +9,13 @@
 #include <vector>
 
 inline const std::vector<uint32_t> DEFAULT_WITNESSES = {
-    2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53};
+    2,
+    3,
+    5,
+    7,
+    11,
+    // 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53
+};
 
 // Selects table[w] for each candidate given a window of WINDOW_BITS bits.
 // Declared here so it can be referenced in correctness_tests.cuh.
@@ -35,7 +41,11 @@ std::vector<bool> gpu_miller_rabin_s1(
 
 // Tests one sub-batch of sub_bsz candidates with a single witness.
 // Returns a passed[] vector of size sub_bsz.
+// perf is accumulated (caller owns it; pass nullptr to skip).
 // Used by the lazy-build driver in bench_mr_gpu to avoid building all candidates upfront.
+// tree_accum: when non-null, enables BatchModCtx GPU-kernel timing and merges
+// the per-sub-batch PerfNode tree into *tree_accum after each call.
+// Pass the same PerfNode for all sub-batches/witnesses to accumulate the full round.
 std::vector<bool> gpu_test_witness(
     std::vector<uint64_t> &N_sub,
     std::vector<uint64_t> &exp_sub,
@@ -44,6 +54,8 @@ std::vector<bool> gpu_test_witness(
     int sub_bsz,
     int s,
     uint32_t witness,
+    PerfCtrs *perf,
+    PerfNode *tree_accum = nullptr,
     bool show_progress = false);
 
 // General version: N-1 = 2^s * d.

@@ -38,6 +38,7 @@
 
 #include "candidate.cuh"
 #include "miller_rabin_runner.cuh"
+#include "perf/perf_node.cuh"
 #include "correctness_tests.cuh"
 #include "helpers/bench_ops.cuh"
 #include "input_parser.h"
@@ -267,6 +268,9 @@ int main(int argc, char *argv[])
         std::vector<int> alive_idx(n_active);
         for (int i = 0; i < n_active; i++) alive_idx[i] = i;
 
+        PerfCtrs round_perf;
+        PerfNode round_tree{"TOTAL"};
+
         for (uint32_t w : DEFAULT_WITNESSES)
         {
             if (alive_idx.empty()) break;
@@ -300,7 +304,10 @@ int main(int argc, char *argv[])
 
                 auto sub_res = gpu_test_witness(N_sub, d_sub, Nm1_sub,
                                                 batch_n_limbs, sub_bsz,
-                                                s, w, show_progress);
+                                                s, w, &round_perf,
+                                                show_report ? &round_tree : nullptr,
+                                                show_progress);
+
                 for (int i = 0; i < sub_bsz; i++)
                     passed_this_witness[start + i] = sub_res[i];
             }
@@ -317,6 +324,9 @@ int main(int argc, char *argv[])
             }
             alive_idx = std::move(new_alive);
         }
+
+        if (show_report)
+            print_perf_accumulated(round_perf, round_tree);
 
         // Map survivors back to groups
         int survivors = 0;

@@ -72,3 +72,11 @@ void window_exp_loop(
         bool show_progress);
 
 void print_perf(const PerfCtrs& perf, BatchModCtx& mont);
+void print_perf_simple(const PerfCtrs& perf);
+
+// Merges src PerfNode tree into dst (same-structure trees; adds ms/calls recursively).
+void merge_perf_tree(PerfNode& dst, const PerfNode& src);
+
+// Prints the combined timing report using accumulated PerfCtrs (host phases) +
+// accumulated PerfNode tree (GPU kernel breakdown). Call once per round at the end.
+void print_perf_accumulated(const PerfCtrs& perf, PerfNode& tree);

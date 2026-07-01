@@ -30,9 +30,11 @@ static std::vector<uint8_t> run_one_witness_s1(
         int sub_bsz,
         uint32_t witness,
         PerfCtrs& perf,
-        bool show_progress)
+        bool show_progress,
+        PerfNode* tree_accum = nullptr)
 {
     BatchModCtx sub_mont(N_sub, n, sub_bsz);
+    sub_mont.perf_enabled = (tree_accum != nullptr);
 
     WitnessBuffers buf(sub_mont, exp_sub, sub_bsz);
 
@@ -75,6 +77,7 @@ static std::vector<uint8_t> run_one_witness_s1(
     perf.check_ms += elapsed_ms();
 
     CU(cudaEventDestroy(ev0)); CU(cudaEventDestroy(ev1));
+    if (tree_accum) merge_perf_tree(*tree_accum, sub_mont.perf_root);
     return passed;
 }
 
@@ -91,10 +94,11 @@ static std::vector<uint8_t> run_one_witness_general(
         int s,
         uint32_t witness,
         PerfCtrs& perf,
-        bool show_progress)
+        bool show_progress,
+        PerfNode* tree_accum = nullptr)
 {
     BatchModCtx sub_mont(N_sub, n, sub_bsz);
-    sub_mont.perf_enabled = false;
+    sub_mont.perf_enabled = (tree_accum != nullptr);
 
     WitnessBuffers buf(sub_mont, exp_sub, sub_bsz);
 
@@ -154,6 +158,8 @@ static std::vector<uint8_t> run_one_witness_general(
     CU(cudaEventDestroy(ev0)); CU(cudaEventDestroy(ev1));
     CU(cudaFree(d_alive));
 
+    if (tree_accum) merge_perf_tree(*tree_accum, sub_mont.perf_root);
+
     // Convert: alive_h[t]==2 means passed
     std::vector<uint8_t> passed(sub_bsz);
     for (int t = 0; t < sub_bsz; t++)
@@ -171,16 +177,19 @@ std::vector<bool> gpu_test_witness(
         int sub_bsz,
         int s,
         uint32_t witness,
+        PerfCtrs* perf_out,
+        PerfNode* tree_accum,
         bool show_progress)
 {
-    PerfCtrs perf;
+    PerfCtrs local;
+    PerfCtrs& perf = perf_out ? *perf_out : local;
     std::vector<uint8_t> raw;
     if (s == 1)
         raw = run_one_witness_s1(N_sub, exp_sub, Nm1_sub, n_limbs, sub_bsz,
-                                  witness, perf, show_progress);
+                                  witness, perf, show_progress, tree_accum);
     else
         raw = run_one_witness_general(N_sub, exp_sub, Nm1_sub, n_limbs, sub_bsz,
-                                       s, witness, perf, show_progress);
+                                       s, witness, perf, show_progress, tree_accum);
     std::vector<bool> out(sub_bsz);
     for (int i = 0; i < sub_bsz; i++) out[i] = raw[i] != 0;
     return out;
