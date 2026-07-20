@@ -67,7 +67,8 @@ static std::vector<uint8_t> run_one_witness_s1(
     perf.memcpy_bytes += (size_t)sub_bsz * n * sizeof(LimbT) * 2;
 
     window_exp_loop(sub_mont, exp_sub, buf.d_r, buf.d_one, buf.d_base, buf.d_scratch,
-                    buf.d_cur_mul, buf.d_exp_dev, sub_bsz, perf, witness, show_progress);
+                    buf.d_cur_mul, buf.d_exp_dev, sub_bsz, perf, witness, show_progress,
+                    tree_accum != nullptr);
 
     CU(cudaEventRecord(ev0));
     sub_mont.check_passed(buf.d_r, buf.d_passed);
@@ -135,7 +136,8 @@ static std::vector<uint8_t> run_one_witness_general(
     perf.memcpy_bytes += (size_t)sub_bsz * n * sizeof(LimbT) * 2 + (size_t)sub_bsz;
 
     window_exp_loop(sub_mont, exp_sub, buf.d_r, buf.d_one, buf.d_base, buf.d_scratch,
-                    buf.d_cur_mul, buf.d_exp_dev, sub_bsz, perf, witness, show_progress);
+                    buf.d_cur_mul, buf.d_exp_dev, sub_bsz, perf, witness, show_progress,
+                    tree_accum != nullptr);
 
     // Initial check: r == 1 or r == N-1
     CU(cudaEventRecord(ev0));

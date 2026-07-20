@@ -156,7 +156,8 @@ void window_exp_loop(
     int n_total,
     PerfCtrs &perf,
     uint32_t witness,
-    bool show_progress)
+    bool show_progress,
+    bool collect_perf)
 {
     int n = mont.n_limbs;
     size_t total_bytes = (size_t)n_total * n * sizeof(LimbT);
@@ -222,23 +223,31 @@ void window_exp_loop(
     {
         int i = start_win - win * WINDOW_BITS;
 
-        auto t_sq0 = hrc::now();
+        hrc::time_point t_sq0;
+        if (collect_perf) t_sq0 = hrc::now();
         for (int sq = 0; sq < WINDOW_BITS; sq++)
         {
             mont.modsq_batch(d_r, d_scratch);
             std::swap(d_r, d_scratch);
         }
-        perf.sq_ms += std::chrono::duration<float, std::milli>(hrc::now() - t_sq0).count();
-        perf.sq_calls += WINDOW_BITS;
+        if (collect_perf)
+        {
+            perf.sq_ms += std::chrono::duration<float, std::milli>(hrc::now() - t_sq0).count();
+            perf.sq_calls += WINDOW_BITS;
+        }
 
         if (any_nonzero[win])
         {
-            auto t_mul0 = hrc::now();
+            hrc::time_point t_mul0;
+            if (collect_perf) t_mul0 = hrc::now();
             select_window_kernel<<<grid_sel, thr>>>(d_cur_mul, d_table, d_exp_dev, i, WINDOW_BITS, n, n_total);
             mont.modmul_batch(d_r, d_cur_mul, d_scratch);
             std::swap(d_r, d_scratch);
-            perf.mul_ms += std::chrono::duration<float, std::milli>(hrc::now() - t_mul0).count();
-            perf.mul_calls++;
+            if (collect_perf)
+            {
+                perf.mul_ms += std::chrono::duration<float, std::milli>(hrc::now() - t_mul0).count();
+                perf.mul_calls++;
+            }
         }
 
         if (show_progress)

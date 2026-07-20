@@ -69,7 +69,8 @@ void window_exp_loop(
         int n_total,
         PerfCtrs& perf,
         uint32_t witness,
-        bool show_progress);
+        bool show_progress,
+        bool collect_perf = false);
 
 void print_perf(const PerfCtrs& perf, BatchModCtx& mont);
 void print_perf_simple(const PerfCtrs& perf);

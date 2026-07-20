@@ -14,10 +14,6 @@
             throw std::runtime_error(std::string("[CUDA] " #expr ": ") + cudaGetErrorString(_e)); \
     } while (0)
 
-// CARRY_TILE: used by the constructor to size d_tile_carry.
-// The carry algorithms themselves live in carry_norm.cu.
-static constexpr int CARRY_TILE = MR_CARRY_TILE;
-
 // ── NTT kernels ───────────────────────────────────────────────────────────────
 
 __global__ static void load_padded_batch(Data64 *__restrict__ dst,
@@ -78,7 +74,7 @@ BigIntNTTBatch::BigIntNTTBatch(int n_limbs_, int n_batch_)
     d_buf_B = d_buf_AB + (size_t)n_batch * padded;
 #if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     {
-        int n_tiles_max = (padded + CARRY_TILE - 1) / CARRY_TILE;
+        int n_tiles_max = (padded + MR_CARRY_TILE - 1) / MR_CARRY_TILE;
         CU(cudaMalloc(&d_tile_carry, (size_t)n_batch * n_tiles_max * sizeof(Data64)));
         CU(cudaMalloc(&d_first_tile, (size_t)n_batch * sizeof(int)));
     }
