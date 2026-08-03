@@ -26,6 +26,13 @@
 //   --bench-ops-long  Longer/more thorough primitive benchmark.
 //   --cpu             Use GMP mpz_probab_prime_p (CPU) instead of GPU; same group
 //                     semantics, one candidate at a time, no batching.
+//   --bench-compare   Self-benchmark: GPU vs CPU on a freshly generated, small-
+//                     factor-free candidate. Ignores <input.txt>. CPU throughput
+//                     is swept across every thread count from 1 to the machine's
+//                     hardware concurrency automatically. Options:
+//                       --digits N        decimal digits of the test candidate (default 100000)
+//                       --timeout S       seconds per run for the throughput phase (default 30)
+//                       --single-iters K  latency-phase repetitions per side (default 10)
 
 #include <cstdio>
 #include <cstdlib>
@@ -43,6 +50,7 @@
 #include "helpers/bench_ops.cuh"
 #include "input_parser.h"
 #include "cpu_runner.h"
+#include "bench/compare_bench.h"
 
 using hrc = std::chrono::high_resolution_clock;
 
@@ -61,6 +69,8 @@ int main(int argc, char *argv[])
     bool cpu_mode = false;
     int  cpu_threads = 0;
     const char *input_file = nullptr;
+    bool run_bench_compare = false;
+    CompareBenchOptions cmp_opts;
 
     for (int i = 1; i < argc; i++)
     {
@@ -79,6 +89,14 @@ int main(int argc, char *argv[])
             show_config = true;
         else if (a == "--cpu")
             cpu_mode = true;
+        else if (a == "--bench-compare")
+            run_bench_compare = true;
+        else if (a == "--digits" && i + 1 < argc)
+            cmp_opts.digits = std::max(1, atoi(argv[++i]));
+        else if (a == "--timeout" && i + 1 < argc)
+            cmp_opts.throughput_timeout_s = std::max(1, atoi(argv[++i]));
+        else if (a == "--single-iters" && i + 1 < argc)
+            cmp_opts.single_iters = std::max(1, atoi(argv[++i]));
         else if (a == "--cpu-parallel")
         {
             cpu_mode = true;
@@ -151,6 +169,12 @@ int main(int argc, char *argv[])
         return 0;
     }
 
+    if (run_bench_compare)
+    {
+        run_compare_bench(cmp_opts);
+        return 0;
+    }
+
     if (run_tests && !input_file)
     {
         run_correctness_tests();
@@ -165,8 +189,10 @@ int main(int argc, char *argv[])
         fprintf(stderr,
                 "Usage: %s [--test] [--report] [--progress] [--config]"
                 " [--bench-ops] [--bench-ops-long] [--cpu] [--cpu-parallel]"
-                " [--threads N | -j N] <input.txt>\n",
-                argv[0]);
+                " [--threads N | -j N] <input.txt>\n"
+                "   or: %s --bench-compare [--digits N] [--timeout S]"
+                " [--single-iters K]\n",
+                argv[0], argv[0]);
         return 1;
     }
 
