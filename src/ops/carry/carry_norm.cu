@@ -74,7 +74,7 @@ __device__ unsigned long long g_dowhile_count = 0;
 #endif
 
 template <typename T>
-__global__ static void carry_16bits(
+__global__ static void carry_Bbits(
     T *d_src,
     T *d_dst,
     int n, int src_stride, int n_batch)
@@ -208,7 +208,7 @@ __global__ static void carry_intra_copy(
     int j = j_start + tid;
 
 #if MR_CARRY_TILE == 32
-    // ── Warp path: same shuffle/ballot trick as carry_16bits, no shared mem ───
+    // ── Warp path: same shuffle/ballot trick as carry_Bbits, no shared mem ───
     // This tile carries no incoming carry (inter-tile carries are propagated by
     // the second kernel), so we only normalize within the warp and export the
     // carry that escapes lane 31 into d_tile_carry.
@@ -238,7 +238,7 @@ __global__ static void carry_intra_copy(
         d_tile_carry[cand * n_tiles + tile] = escape;
 #else
     // ── Block path: shared memory, works for any CARRY_TILE > 32 ──────────────
-    // Same scheme as carry_16bits: currVal and the scalar carry live in
+    // Same scheme as carry_Bbits: currVal and the scalar carry live in
     // registers, the carry is shuffled to the right neighbour through s_carry[],
     // and the carry escaping lane CARRY_TILE-1 is accumulated into escape.
     __shared__ uint64_t s_carry[CARRY_TILE];
@@ -718,7 +718,7 @@ void carry_stats_print_and_reset()
     cudaMemcpyFromSymbol(&h_for, g_for_count, sizeof(h_for));
     cudaMemcpyFromSymbol(&h_dowhile, g_dowhile_count, sizeof(h_dowhile));
     if (h_for > 0)
-        printf("[carry_16bits] for=%llu  do-while=%llu  mean=%.3f iter/tile\n",
+        printf("[carry_Bbits] for=%llu  do-while=%llu  mean=%.3f iter/tile\n",
                h_for, h_dowhile, (double)h_dowhile / (double)h_for);
     unsigned long long zero = 0;
     cudaMemcpyToSymbol(g_for_count, &zero, sizeof(zero));
@@ -766,7 +766,7 @@ void Multiplier::carry_to_limbs(LimbT *d_out, int n_out, cudaStream_t s)
     }
 
 #elif CARRY_NORM_ALG == CARRY_ALG_SINGLE_TILE
-    carry_16bits<<<n_batch, CARRY_TILE, 0, s>>>(raw, d_out, n_out, padded, n_batch);
+    carry_Bbits<<<n_batch, CARRY_TILE, 0, s>>>(raw, d_out, n_out, padded, n_batch);
 
 #elif CARRY_NORM_ALG == CARRY_ALG_SEQUENTIAL
     int blk = (n_batch + CARRY_TILE - 1) / CARRY_TILE;
@@ -793,7 +793,7 @@ void Multiplier::carry_after_vadd(LimbT *d_dst, int n_dst, cudaStream_t s)
             d_dst, d_tile_carry, d_first_tile, n_dst, n_batch);
     }
 #elif CARRY_NORM_ALG == CARRY_ALG_SINGLE_TILE
-    carry_16bits<<<n_batch, CARRY_TILE, 0, s>>>(d_dst, d_dst, n_dst, n_dst, n_batch);
+    carry_Bbits<<<n_batch, CARRY_TILE, 0, s>>>(d_dst, d_dst, n_dst, n_dst, n_batch);
 #elif CARRY_NORM_ALG == CARRY_ALG_PREFIX_SCAN
     pscan_normalize<<<n_batch, PSCAN_TILE, 0, s>>>(d_dst, d_dst, n_dst, n_dst, n_batch);
 #endif
@@ -838,7 +838,7 @@ void Multiplier::add_and_carry(LimbT *d_a, const LimbT *d_b, int n, int n_passes
     unsigned bp = (unsigned)(n + THR - 1) / THR;
     vadd_batch<<<dim3(bp, (unsigned)n_batch), THR, 0, s>>>(
         d_a, d_a, d_b, n, n_batch);
-    carry_16bits<<<n_batch, CARRY_TILE, 0, s>>>(d_a, d_a, n, n, n_batch);
+    carry_Bbits<<<n_batch, CARRY_TILE, 0, s>>>(d_a, d_a, n, n, n_batch);
 
 #elif CARRY_NORM_ALG == CARRY_ALG_SEQUENTIAL
     constexpr int THR = MR_THR_ADD;

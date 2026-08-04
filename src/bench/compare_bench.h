@@ -17,6 +17,10 @@ struct CompareBenchOptions {
     int digits = 100000;       // decimal digits of the test candidate (the "N" the user passes)
     int throughput_timeout_s = 30;
     int single_iters = 10;
+    int gpu_items = 0;          // 0 = MR_BATCH_SIZE (full batch); set to 1 for --bench-single
+    bool gpu_only = false;      // true for --bench-single: skip every CPU phase
+    bool skip_phase1 = false;   // true: skip the throughput phase entirely
+    bool skip_phase2 = false;   // true: skip the single-candidate latency phase entirely
 };
 
 void run_compare_bench(const CompareBenchOptions &opts);

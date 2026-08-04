@@ -33,6 +33,9 @@
 //                       --digits N        decimal digits of the test candidate (default 100000)
 //                       --timeout S       seconds per run for the throughput phase (default 30)
 //                       --single-iters K  latency-phase repetitions per side (default 10)
+//   --bench-single    Same as --bench-compare, and accepts the same options,
+//                     but the GPU throughput phase runs a batch of 1 item
+//                     instead of the full MR_BATCH_SIZE.
 
 #include <cstdio>
 #include <cstdlib>
@@ -56,6 +59,54 @@ using hrc = std::chrono::high_resolution_clock;
 
 static constexpr int BATCH_SIZE = MR_BATCH_SIZE;
 
+static void print_usage(const char *prog, FILE *out)
+{
+    fprintf(out,
+        "Usage: %s [options] <input.txt>\n"
+        "\n"
+        "Input format — one equation per line, with an optional group prefix:\n"
+        "\n"
+        "  [group_id:] equation\n"
+        "\n"
+        "  group_id  any string without ':'. Optional. Lines sharing a group_id\n"
+        "            are tested together: if one equation is composite, the\n"
+        "            rest of the group is skipped.\n"
+        "  equation  integer arithmetic expression: + - * / %% ^ and parentheses,\n"
+        "            e.g. \"10^18001 - 25*10^1334 - 1\"\n"
+        "\n"
+        "  Lines with no ':' are treated as a singleton group. Blank lines and\n"
+        "  lines beginning with '#' are ignored.\n"
+        "\n"
+        "Options:\n"
+        "  --test              Run GMP-checked correctness tests before the benchmark.\n"
+        "  --report            Print a per-candidate detail report.\n"
+        "  --progress          Show a live GPU progress bar.\n"
+        "  --config            Print the active build configuration and exit.\n"
+        "  --bench-ops         Benchmark the individual GPU primitives.\n"
+        "  --bench-ops-long    Longer/more thorough primitive benchmark.\n"
+        "  --cpu               Use GMP mpz_probab_prime_p (CPU) instead of GPU; same\n"
+        "                      group semantics, one candidate at a time, no batching.\n"
+        "  --cpu-parallel      Like --cpu, but spread across all hardware threads.\n"
+        "  --threads N, -j N   Like --cpu, but spread across N threads.\n"
+        "  --help, -h          Show this help and exit.\n"
+        "\n"
+        "  --bench-compare     Self-benchmark: GPU vs CPU on a freshly generated,\n"
+        "                      small-factor-free candidate. Ignores <input.txt>. CPU\n"
+        "                      throughput is swept across every thread count from 1\n"
+        "                      to the machine's hardware concurrency automatically.\n"
+        "  --bench-single      Same as --bench-compare, and accepts the same options,\n"
+        "                      but runs the GPU only (no CPU phases) with a batch of\n"
+        "                      1 item instead of the full MR_BATCH_SIZE.\n"
+        "\n"
+        "  Options for --bench-compare / --bench-single:\n"
+        "    --digits N        decimal digits of the test candidate (default 100000)\n"
+        "    --timeout S       seconds per run for the throughput phase (default 30)\n"
+        "    --single-iters K  latency-phase repetitions per side (default 10)\n"
+        "    --skip-phase-1    skip the throughput phase\n"
+        "    --skip-phase-2    skip the single-candidate latency phase\n",
+        prog);
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 int main(int argc, char *argv[])
@@ -66,6 +117,7 @@ int main(int argc, char *argv[])
     bool run_bench = false;
     bool run_bench_long = false;
     bool show_config = false;
+    bool show_help = false;
     bool cpu_mode = false;
     int  cpu_threads = 0;
     const char *input_file = nullptr;
@@ -87,16 +139,28 @@ int main(int argc, char *argv[])
             run_bench_long = true;
         else if (a == "--config")
             show_config = true;
+        else if (a == "--help" || a == "-h")
+            show_help = true;
         else if (a == "--cpu")
             cpu_mode = true;
         else if (a == "--bench-compare")
             run_bench_compare = true;
+        else if (a == "--bench-single")
+        {
+            run_bench_compare = true;
+            cmp_opts.gpu_items = 1;
+            cmp_opts.gpu_only = true;
+        }
         else if (a == "--digits" && i + 1 < argc)
             cmp_opts.digits = std::max(1, atoi(argv[++i]));
         else if (a == "--timeout" && i + 1 < argc)
             cmp_opts.throughput_timeout_s = std::max(1, atoi(argv[++i]));
         else if (a == "--single-iters" && i + 1 < argc)
             cmp_opts.single_iters = std::max(1, atoi(argv[++i]));
+        else if (a == "--skip-phase-1")
+            cmp_opts.skip_phase1 = true;
+        else if (a == "--skip-phase-2")
+            cmp_opts.skip_phase2 = true;
         else if (a == "--cpu-parallel")
         {
             cpu_mode = true;
@@ -110,6 +174,12 @@ int main(int argc, char *argv[])
         }
         else if (!input_file)
             input_file = argv[i];
+    }
+
+    if (show_help)
+    {
+        print_usage(argv[0], stdout);
+        return 0;
     }
 
     if (show_config)
@@ -186,13 +256,7 @@ int main(int argc, char *argv[])
 
     if (!input_file)
     {
-        fprintf(stderr,
-                "Usage: %s [--test] [--report] [--progress] [--config]"
-                " [--bench-ops] [--bench-ops-long] [--cpu] [--cpu-parallel]"
-                " [--threads N | -j N] <input.txt>\n"
-                "   or: %s --bench-compare [--digits N] [--timeout S]"
-                " [--single-iters K]\n",
-                argv[0], argv[0]);
+        print_usage(argv[0], stderr);
         return 1;
     }
 

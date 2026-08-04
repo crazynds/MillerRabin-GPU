@@ -14,13 +14,14 @@
 // to run or how to present the result — that's compare_bench's job.
 
 #include <gmp.h>
+#include "config.h"
 #include "bench_common.h"
 
-// Runs one GPU witness check (gpu_test_witness) on batches of MR_BATCH_SIZE
-// copies of N, back-to-back, until `timeout_sec` has elapsed. Waits for the
-// in-flight batch to finish before returning (GPU calls here are synchronous,
-// so this is automatic).
-ThroughputStats run_gpu_throughput(const mpz_t N, int timeout_sec, unsigned long witness = 2);
+// Runs one GPU witness check (gpu_test_witness) on batches of `n_items`
+// copies of N (MR_BATCH_SIZE by default), back-to-back, until `timeout_sec`
+// has elapsed. Waits for the in-flight batch to finish before returning (GPU
+// calls here are synchronous, so this is automatic).
+ThroughputStats run_gpu_throughput(const mpz_t N, int timeout_sec, unsigned long witness = 2, int n_items = MR_BATCH_SIZE);
 
 // Runs one CPU witness check (cpu_witness.h) on N repeatedly across
 // `n_threads` threads (each pinned to a core) until `timeout_sec` has elapsed.

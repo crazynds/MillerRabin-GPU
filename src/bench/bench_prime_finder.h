@@ -16,7 +16,7 @@
 // Fills `out` (caller-owned, must already be mpz_init'd) with a random
 // `digits`-digit odd number that has no factor among the primes below
 // `trial_limit`. 2^32 (all 32-bit primes, ~203M of them) is impractical to
-// sieve for a one-off setup step, so this defaults to 2^20 (~82k primes) —
-// enough to discard the overwhelming majority of trivially-composite
-// numbers cheaply.
-void find_bench_candidate(mpz_t out, int digits, unsigned long trial_limit = (1u << 20));
+// sieve for a one-off setup step, so this defaults to 15485863 — the
+// 1,000,000th prime — giving exactly the first 1M primes to trial-divide
+// against.
+void find_bench_candidate(mpz_t out, int digits, unsigned long trial_limit = 15485863);

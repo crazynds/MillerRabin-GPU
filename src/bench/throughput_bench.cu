@@ -18,7 +18,7 @@ static double seconds_since(hrc::time_point t0)
 
 // ── GPU throughput ────────────────────────────────────────────────────────────
 
-ThroughputStats run_gpu_throughput(const mpz_t N, int timeout_sec, unsigned long witness)
+ThroughputStats run_gpu_throughput(const mpz_t N, int timeout_sec, unsigned long witness, int n_items)
 {
     int digits = (int)mpz_sizeinbase(N, 10) + 4;
     int n_limbs = limbs_for_digits(digits);
@@ -26,7 +26,7 @@ ThroughputStats run_gpu_throughput(const mpz_t N, int timeout_sec, unsigned long
     NumberCandidate cand;
     cand.build_from_mpz(N, n_limbs);
 
-    int n_total = MR_BATCH_SIZE;
+    int n_total = n_items;
     std::vector<uint64_t> N_all((size_t)n_total * n_limbs);
     std::vector<uint64_t> d_all((size_t)n_total * n_limbs);
     std::vector<uint64_t> Nm1_all((size_t)n_total * n_limbs);
