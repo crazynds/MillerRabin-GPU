@@ -56,17 +56,20 @@ ThroughputStats run_cpu_throughput(const mpz_t N, int timeout_sec, int n_threads
     if (n_threads < 1) n_threads = 1;
 
     std::atomic<bool> stop{false};
-    std::atomic<long long> total_count{0};
+    std::vector<long long> local_count(n_threads, 0);
+    std::vector<double> local_elapsed_s(n_threads, 0.0);
 
-    auto worker = [&]() {
+    auto worker = [&](int idx) {
         CpuWitnessCtx ctx;
         cpu_witness_ctx_init(ctx, N);
-        long long local_count = 0;
+        auto t_local = hrc::now();
+        long long count = 0;
         while (!stop.load(std::memory_order_relaxed)) {
             cpu_test_witness(ctx, witness);
-            local_count++;
+            count++;
         }
-        total_count.fetch_add(local_count, std::memory_order_relaxed);
+        local_count[idx] = count;
+        local_elapsed_s[idx] = seconds_since(t_local); // this thread's own run window, not the group's
         cpu_witness_ctx_clear(ctx);
     };
 
@@ -74,7 +77,7 @@ ThroughputStats run_cpu_throughput(const mpz_t N, int timeout_sec, int n_threads
     threads.reserve(n_threads);
     int n_cores = (int)std::thread::hardware_concurrency();
     for (int t = 0; t < n_threads; t++) {
-        threads.emplace_back(worker);
+        threads.emplace_back(worker, t);
         if (n_cores > 0) {
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
@@ -83,13 +86,24 @@ ThroughputStats run_cpu_throughput(const mpz_t N, int timeout_sec, int n_threads
         }
     }
 
-    auto t0 = hrc::now();
     std::this_thread::sleep_for(std::chrono::seconds(timeout_sec));
     stop.store(true, std::memory_order_relaxed);
     for (auto &th : threads) th.join(); // waits for each thread's in-flight check to finish
 
+    // Each thread ran for its own wall-clock window (offset by its own startup
+    // stagger), so aggregate throughput is the SUM of each thread's own
+    // count/elapsed_s — not total_count divided by one global elapsed time,
+    // which would silently use the slowest thread's window for everyone.
+    long long total_count = 0;
+    double total_per_sec = 0.0;
+    for (int t = 0; t < n_threads; t++) {
+        total_count += local_count[t];
+        if (local_elapsed_s[t] > 0.0)
+            total_per_sec += local_count[t] / local_elapsed_s[t];
+    }
+
     ThroughputStats stats;
-    stats.count = total_count.load();
-    stats.elapsed_s = seconds_since(t0);
+    stats.count = total_count;
+    stats.elapsed_s = total_per_sec > 0.0 ? total_count / total_per_sec : 0.0;
     return stats;
 }
