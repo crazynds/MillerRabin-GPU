@@ -33,9 +33,7 @@
 //                       --digits N        decimal digits of the test candidate (default 100000)
 //                       --timeout S       seconds per run for the throughput phase (default 30)
 //                       --single-iters K  latency-phase repetitions per side (default 10)
-//   --bench-single    Same as --bench-compare, and accepts the same options,
-//                     but the GPU throughput phase runs a batch of 1 item
-//                     instead of the full MR_BATCH_SIZE.
+//                       --do=WHO          restrict to one side (--do=gpu, --do=Ncpu)
 
 #include <cstdio>
 #include <cstdlib>
@@ -94,16 +92,21 @@ static void print_usage(const char *prog, FILE *out)
         "                      small-factor-free candidate. Ignores <input.txt>. CPU\n"
         "                      throughput is swept across every thread count from 1\n"
         "                      to the machine's hardware concurrency automatically.\n"
-        "  --bench-single      Same as --bench-compare, and accepts the same options,\n"
-        "                      but runs the GPU only (no CPU phases) with a batch of\n"
-        "                      1 item instead of the full MR_BATCH_SIZE.\n"
         "\n"
-        "  Options for --bench-compare / --bench-single:\n"
+        "  Options for --bench-compare:\n"
         "    --digits N        decimal digits of the test candidate (default 100000)\n"
         "    --timeout S       seconds per run for the throughput phase (default 30)\n"
         "    --single-iters K  latency-phase repetitions per side (default 10)\n"
         "    --skip-phase-1    skip the throughput phase\n"
-        "    --skip-phase-2    skip the single-candidate latency phase\n",
+        "    --skip-phase-2    skip the single-candidate latency phase\n"
+        "    --do=WHO          restrict --bench-compare to one side, printing its\n"
+        "                      results as soon as each phase finishes (useful for\n"
+        "                      firing one sbatch job per side):\n"
+        "                        --do=gpu     GPU only\n"
+        "                        --do=Ncpu    CPU only, with exactly N threads,\n"
+        "                                     e.g. --do=1cpu, --do=8cpu\n"
+        "                      Without --do, GPU runs once and CPU is swept across\n"
+        "                      every thread count from 1 to hardware_concurrency().\n",
         prog);
 }
 
@@ -145,12 +148,6 @@ int main(int argc, char *argv[])
             cpu_mode = true;
         else if (a == "--bench-compare")
             run_bench_compare = true;
-        else if (a == "--bench-single")
-        {
-            run_bench_compare = true;
-            cmp_opts.gpu_items = 1;
-            cmp_opts.gpu_only = true;
-        }
         else if (a == "--digits" && i + 1 < argc)
             cmp_opts.digits = std::max(1, atoi(argv[++i]));
         else if (a == "--timeout" && i + 1 < argc)
@@ -161,6 +158,28 @@ int main(int argc, char *argv[])
             cmp_opts.skip_phase1 = true;
         else if (a == "--skip-phase-2")
             cmp_opts.skip_phase2 = true;
+        else if (a.rfind("--do=", 0) == 0)
+        {
+            std::string who = a.substr(5);
+            if (who == "gpu")
+            {
+                cmp_opts.gpu_only = true;
+                cmp_opts.cpu_only = false;
+            }
+            else
+            {
+                size_t suffix_pos = who.rfind("cpu");
+                if (suffix_pos == std::string::npos || suffix_pos == 0)
+                {
+                    fprintf(stderr, "Invalid --do value '%s' (expected \"gpu\" or \"<N>cpu\")\n", who.c_str());
+                    return 1;
+                }
+                int n_threads = std::max(1, atoi(who.substr(0, suffix_pos).c_str()));
+                cmp_opts.cpu_only = true;
+                cmp_opts.gpu_only = false;
+                cmp_opts.cpu_threads_fixed = n_threads;
+            }
+        }
         else if (a == "--cpu-parallel")
         {
             cpu_mode = true;
