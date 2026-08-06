@@ -16,6 +16,9 @@
 #include "gpuntt/common/common.cuh"
 #include "gpuntt/common/modular_arith.cuh"
 
+#include "helpers/const_dispatch.h"
+#include "ntt_merge_kernel_bounds.h"
+
 using namespace gpuntt;
 
 #define GPUNTT_CHECK(expr)                                                                              \
@@ -59,11 +62,15 @@ struct OpSq
 // InverseCoreLowRing — fused first (and only) kernel for n_power < 11
 // ─────────────────────────────────────────────────────────────────────────────
 
-template <typename Op>
+// N_POWER is a template parameter so that `loops`, `half_n`, `m` and every shift
+// become compile-time constants: the #pragma unroll below then fully unrolls and
+// the address arithmetic collapses to immediates.  Only n_power < 11 reaches this
+// kernel, so 10 instantiations cover every case (see launch_low_ring_fused).
+template <typename Op, int N_POWER>
 __global__ static void InverseCoreLowRing_Fused(
     Data64 *polynomial_out,
     const Root64 *__restrict__ inverse_root_of_unity_table,
-    Modulus64 modulus, int shared_index, int N_power,
+    Modulus64 modulus,
     Ninverse64 n_inverse, bool reduction_poly_check, int total_batch,
     Op op)
 {
@@ -81,15 +88,15 @@ __global__ static void InverseCoreLowRing_Fused(
 
     int t_2 = 0;
     int t_ = 0;
-    int offset = idx_y << N_power;
-    int loops = N_power;
-    int m = (int)1 << (N_power - 1);
+    const int offset = idx_y << N_POWER;
+    constexpr int loops = N_POWER;
+    int m = (int)1 << (N_POWER - 1);
 
-    const int half_n = 1 << (N_power - 1);
-    const int row_base = idx_y << N_power;
+    constexpr int half_n = 1 << (N_POWER - 1);
+    const int row_base = idx_y << N_POWER;
     const int shared_address0 = row_base + idx_x;
     const int shared_address1 = shared_address0 + half_n;
-    location_t global_address0 = idx_x + (location_t)(batch_index_safe << N_power);
+    location_t global_address0 = idx_x + (location_t)(batch_index_safe << N_POWER);
     location_t global_address1 = global_address0 + half_n;
 
     // Fused load: op holds the input pointer(s) and applies the multiply
@@ -144,15 +151,21 @@ __global__ static void InverseCoreLowRing_Fused(
 // InverseCore — fused first-pass kernel for n_power 11-24
 // ─────────────────────────────────────────────────────────────────────────────
 
-template <typename Op>
+// OIC == outer_iteration_count, the butterfly-stage trip count; SI ==
+// shared_index.  Templating both makes `loops`, the `offset / (1 << (OIC - 1))`
+// divisor and every per-iteration shift amount compile-time constants — the
+// `((x >> t_) << t_)` pairs collapse into single masked ops.
+template <typename Op, int OIC, int SI>
 __global__ static void InverseCore_Fused(
     Data64 *polynomial_out,
     const Root64 *__restrict__ inverse_root_of_unity_table,
-    Modulus64 modulus, int shared_index, int logm, int k,
-    int outer_iteration_count, int N_power, Ninverse64 n_inverse,
+    Modulus64 modulus, int logm, int k,
+    int N_power, Ninverse64 n_inverse,
     bool last_kernel, bool reduction_poly_check,
     Op op)
 {
+    constexpr int outer_iteration_count = OIC;
+    constexpr int shared_index = SI;
     const int idx_x = threadIdx.x;
     const int idx_y = threadIdx.y;
     const int block_x = blockIdx.x;
@@ -168,7 +181,7 @@ __global__ static void InverseCore_Fused(
     int t_2 = N_power - logm - 1;
     location_t offset = 1 << (N_power - k - 1);
     int t_ = (shared_index + 1) - outer_iteration_count;
-    int loops = outer_iteration_count;
+    constexpr int loops = outer_iteration_count;
     location_t m = (location_t)1 << logm;
 
     location_t global_addresss =
@@ -238,15 +251,17 @@ __global__ static void InverseCore_Fused(
 // InverseCore_ — fused first-pass kernel for n_power >= 25 (transposed block layout)
 // ─────────────────────────────────────────────────────────────────────────────
 
-template <typename Op>
+template <typename Op, int OIC, int SI>
 __global__ static void InverseCore__Fused(
     Data64 *polynomial_out,
     const Root64 *__restrict__ inverse_root_of_unity_table,
-    Modulus64 modulus, int shared_index, int logm, int k,
-    int outer_iteration_count, int N_power, Ninverse64 n_inverse,
+    Modulus64 modulus, int logm, int k,
+    int N_power, Ninverse64 n_inverse,
     bool last_kernel, bool reduction_poly_check,
     Op op)
 {
+    constexpr int outer_iteration_count = OIC;
+    constexpr int shared_index = SI;
     const int idx_x = threadIdx.x;
     const int idx_y = threadIdx.y;
     const int block_x = blockIdx.x;
@@ -262,7 +277,7 @@ __global__ static void InverseCore__Fused(
     int t_2 = N_power - logm - 1;
     location_t offset = 1 << (N_power - k - 1);
     int t_ = (shared_index + 1) - outer_iteration_count;
-    int loops = outer_iteration_count;
+    constexpr int loops = outer_iteration_count;
     location_t m = (location_t)1 << logm;
 
     // Transposed: block_x ↔ block_y compared to InverseCore
@@ -334,13 +349,16 @@ __global__ static void InverseCore__Fused(
 // copied here because __global__ template symbols are not exported by the lib).
 // ─────────────────────────────────────────────────────────────────────────────
 
+template <int OIC, int SI>
 __global__ static void InverseCore_Tail(
     Data64 *polynomial_in, Data64 *polynomial_out,
     const Root64 *__restrict__ inverse_root_of_unity_table,
-    Modulus64 modulus, int shared_index, int logm, int k,
-    int outer_iteration_count, int N_power, Ninverse64 n_inverse,
+    Modulus64 modulus, int logm, int k,
+    int N_power, Ninverse64 n_inverse,
     bool last_kernel, bool reduction_poly_check)
 {
+    constexpr int outer_iteration_count = OIC;
+    constexpr int shared_index = SI;
     const int idx_x = threadIdx.x;
     const int idx_y = threadIdx.y;
     const int block_x = blockIdx.x;
@@ -356,7 +374,7 @@ __global__ static void InverseCore_Tail(
     int t_2 = N_power - logm - 1;
     location_t offset = 1 << (N_power - k - 1);
     int t_ = (shared_index + 1) - outer_iteration_count;
-    int loops = outer_iteration_count;
+    constexpr int loops = outer_iteration_count;
     location_t m = (location_t)1 << logm;
 
     location_t global_addresss =
@@ -440,84 +458,88 @@ static void dispatch_intt_fused(
     const bool reduction_poly_check =
         (cfg.reduction_poly == ReductionPolynomial::X_N_minus);
 
+    // Both non-low-ring kernels specialise on (outer_iteration_count, shared_index),
+    // so their launches share one nested dispatch.
+    auto dispatch_pass = [&](const KernelConfig &p, auto &&launch)
+    {
+        dispatch_const<1, MAX_OUTER_ITERATION_COUNT>(
+            p.outer_iteration_count, [&](auto oic)
+            {
+                dispatch_const<MIN_SHARED_INDEX, MAX_SHARED_INDEX>(
+                    p.shared_index, [&](auto si)
+                    { launch(oic, si); });
+            });
+        GPUNTT_CHECK(cudaGetLastError());
+    };
+
+    // Every remaining pass is the plain (non-fused) tail kernel.
+    auto launch_tail = [&](const KernelConfig &p)
+    {
+        dispatch_pass(p, [&](auto oic, auto si)
+                      {
+            InverseCore_Tail<oic.value, si.value><<<
+                dim3(p.griddim_x, p.griddim_y, batch_size),
+                dim3(p.blockdim_x, p.blockdim_y),
+                p.shared_memory, cfg.stream>>>(
+                device_inout, device_inout,
+                root_of_unity_table, modulus,
+                p.logm, p.k,
+                cfg.n_power, cfg.mod_inverse,
+                p.not_last_kernel, reduction_poly_check); });
+    };
+
     if (low_ring)
     {
+        // shared_index is unused by this kernel (its t_ starts at 0), so n_power
+        // is the only constant it needs.
         auto &p = kernel_params[cfg.n_power][0];
         int grid_x = (batch_size + p.blockdim_y - 1) / p.blockdim_y;
-        InverseCoreLowRing_Fused<<<
-            dim3(grid_x, 1, 1),
-            dim3(p.blockdim_x, p.blockdim_y),
-            p.shared_memory, cfg.stream>>>(
-            device_inout,
-            root_of_unity_table, modulus,
-            p.shared_index, cfg.n_power, cfg.mod_inverse,
-            reduction_poly_check, batch_size, op);
+        dispatch_const<1, MAX_LOW_RING_N_POWER>(
+            cfg.n_power, [&](auto np)
+            {
+                InverseCoreLowRing_Fused<Op, np.value><<<
+                    dim3(grid_x, 1, 1),
+                    dim3(p.blockdim_x, p.blockdim_y),
+                    p.shared_memory, cfg.stream>>>(
+                    device_inout,
+                    root_of_unity_table, modulus,
+                    cfg.mod_inverse,
+                    reduction_poly_check, batch_size, op);
+            });
         GPUNTT_CHECK(cudaGetLastError());
+        return;
     }
-    else if (std_kernel)
+
+    // Pass 0 is the fused kernel: standard block layout below n_power 25,
+    // transposed (InverseCore_ equivalent) at or above it.
     {
-        // Pass 0: fused first kernel
-        {
-            auto &p = kernel_params[cfg.n_power][0];
-            InverseCore_Fused<<<
-                dim3(p.griddim_x, p.griddim_y, batch_size),
-                dim3(p.blockdim_x, p.blockdim_y),
-                p.shared_memory, cfg.stream>>>(
-                device_inout,
-                root_of_unity_table, modulus,
-                p.shared_index, p.logm, p.k, p.outer_iteration_count,
-                cfg.n_power, cfg.mod_inverse,
-                p.not_last_kernel, reduction_poly_check, op);
-            GPUNTT_CHECK(cudaGetLastError());
-        }
-        // Remaining passes: plain tail kernel
-        for (int i = 1; i < (int)kernel_params[cfg.n_power].size(); i++)
-        {
-            auto &p = kernel_params[cfg.n_power][i];
-            InverseCore_Tail<<<
-                dim3(p.griddim_x, p.griddim_y, batch_size),
-                dim3(p.blockdim_x, p.blockdim_y),
-                p.shared_memory, cfg.stream>>>(
-                device_inout, device_inout,
-                root_of_unity_table, modulus,
-                p.shared_index, p.logm, p.k, p.outer_iteration_count,
-                cfg.n_power, cfg.mod_inverse,
-                p.not_last_kernel, reduction_poly_check);
-            GPUNTT_CHECK(cudaGetLastError());
-        }
+        auto &p = kernel_params[cfg.n_power][0];
+        dispatch_pass(p, [&](auto oic, auto si)
+                      {
+            if (std_kernel)
+                InverseCore_Fused<Op, oic.value, si.value><<<
+                    dim3(p.griddim_x, p.griddim_y, batch_size),
+                    dim3(p.blockdim_x, p.blockdim_y),
+                    p.shared_memory, cfg.stream>>>(
+                    device_inout,
+                    root_of_unity_table, modulus,
+                    p.logm, p.k,
+                    cfg.n_power, cfg.mod_inverse,
+                    p.not_last_kernel, reduction_poly_check, op);
+            else
+                InverseCore__Fused<Op, oic.value, si.value><<<
+                    dim3(p.griddim_x, p.griddim_y, batch_size),
+                    dim3(p.blockdim_x, p.blockdim_y),
+                    p.shared_memory, cfg.stream>>>(
+                    device_inout,
+                    root_of_unity_table, modulus,
+                    p.logm, p.k,
+                    cfg.n_power, cfg.mod_inverse,
+                    p.not_last_kernel, reduction_poly_check, op); });
     }
-    else
-    {
-        // Pass 0: fused using transposed-block kernel (InverseCore_ equivalent)
-        {
-            auto &p = kernel_params[cfg.n_power][0];
-            InverseCore__Fused<<<
-                dim3(p.griddim_x, p.griddim_y, batch_size),
-                dim3(p.blockdim_x, p.blockdim_y),
-                p.shared_memory, cfg.stream>>>(
-                device_inout,
-                root_of_unity_table, modulus,
-                p.shared_index, p.logm, p.k, p.outer_iteration_count,
-                cfg.n_power, cfg.mod_inverse,
-                p.not_last_kernel, reduction_poly_check, op);
-            GPUNTT_CHECK(cudaGetLastError());
-        }
-        // Remaining passes
-        for (int i = 1; i < (int)kernel_params[cfg.n_power].size(); i++)
-        {
-            auto &p = kernel_params[cfg.n_power][i];
-            InverseCore_Tail<<<
-                dim3(p.griddim_x, p.griddim_y, batch_size),
-                dim3(p.blockdim_x, p.blockdim_y),
-                p.shared_memory, cfg.stream>>>(
-                device_inout, device_inout,
-                root_of_unity_table, modulus,
-                p.shared_index, p.logm, p.k, p.outer_iteration_count,
-                cfg.n_power, cfg.mod_inverse,
-                p.not_last_kernel, reduction_poly_check);
-            GPUNTT_CHECK(cudaGetLastError());
-        }
-    }
+
+    for (int i = 1; i < (int)kernel_params[cfg.n_power].size(); i++)
+        launch_tail(kernel_params[cfg.n_power][i]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

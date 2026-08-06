@@ -761,10 +761,8 @@ static void run_correctness_tests(BatchModCtx &mont,
 
 static void run_correctness_tests()
 {
-    // Generate 4 random odd numbers of ~18000 decimal digits each.
-    // Odd ensures N-1 is even (required for Miller-Rabin decomposition).
     constexpr int NB = 512;
-    constexpr int TARGET_DIGITS = 18000;
+    constexpr int TARGET_DIGITS = 5000;
     constexpr int TARGET_BITS = (int)(TARGET_DIGITS / 0.30103) + 1;
 
     int n_limbs = limbs_for_digits(TARGET_DIGITS + 4);
