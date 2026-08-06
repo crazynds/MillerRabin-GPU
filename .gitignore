@@ -1,4 +1,5 @@
 .claude/
+sync_alfa.sh
 build/
 overleaf/
 params.cmake

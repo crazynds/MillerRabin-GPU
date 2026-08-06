@@ -3,6 +3,7 @@
 #include "ops/mul/ntt_merge.cuh"
 #include "ops/mul/ntt_check.cuh"
 #include "lib/gpuntt/ntt_merge_intt_fused.cuh"
+#include "lib/gpuntt/ntt_merge_ntt_fused.cuh"
 #include <stdexcept>
 #include <string>
 
@@ -16,6 +17,7 @@
 
 // ── NTT kernels ───────────────────────────────────────────────────────────────
 
+#ifndef MR_NTT_FUSED_PAD
 __global__ static void load_padded_batch(Data64 *__restrict__ dst,
                                          const Data64 *__restrict__ src,
                                          int n_src, int padded, int n_batch)
@@ -26,6 +28,7 @@ __global__ static void load_padded_batch(Data64 *__restrict__ dst,
         return;
     dst[cand * padded + j] = (j < n_src) ? src[cand * n_src + j] : 0ULL;
 }
+#endif
 
 __global__ static void pmul_batch(Data64 *__restrict__ a, const Data64 *__restrict__ b,
                                   int total, Data64 p)
@@ -109,24 +112,40 @@ ntt_configuration<Data64> BigIntNTTBatch::make_cfg(type t, cudaStream_t s)
 
 void BigIntNTTBatch::ntt_A(const Data64 *d_src, int n_src, cudaStream_t s)
 {
+#ifdef MR_NTT_FUSED_PAD
+    GPU_NTT_ZeroPadLoad(d_buf_A, d_src, n_src, d_fwd_table, modulus,
+                        make_cfg(FORWARD, s), n_batch);
+#else
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(padded + thr - 1) / thr;
     load_padded_batch<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
         d_buf_A, d_src, n_src, padded, n_batch);
     GPU_NTT_Inplace(d_buf_A, d_fwd_table, modulus, make_cfg(FORWARD, s), n_batch);
+#endif
 }
 
 void BigIntNTTBatch::ntt_B(const Data64 *d_src, int n_src, cudaStream_t s)
 {
+#ifdef MR_NTT_FUSED_PAD
+    GPU_NTT_ZeroPadLoad(d_buf_B, d_src, n_src, d_fwd_table, modulus,
+                        make_cfg(FORWARD, s), n_batch);
+#else
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(padded + thr - 1) / thr;
     load_padded_batch<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
         d_buf_B, d_src, n_src, padded, n_batch);
     GPU_NTT_Inplace(d_buf_B, d_fwd_table, modulus, make_cfg(FORWARD, s), n_batch);
+#endif
 }
 
 void BigIntNTTBatch::ntt_AB(const Data64 *d_srcA, const Data64 *d_srcB, int n_src, cudaStream_t s)
 {
+    // d_buf_A and d_buf_B are contiguous, so the pair transforms in one launch:
+    // candidates [0, n_batch) gather from d_srcA, [n_batch, 2*n_batch) from d_srcB.
+#ifdef MR_NTT_FUSED_PAD
+    GPU_NTT_ZeroPadLoad2(d_buf_A, d_srcA, d_srcB, n_src, n_batch,
+                         d_fwd_table, modulus, make_cfg(FORWARD, s), 2 * n_batch);
+#else
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(padded + thr - 1) / thr;
     load_padded_batch<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
@@ -134,6 +153,7 @@ void BigIntNTTBatch::ntt_AB(const Data64 *d_srcA, const Data64 *d_srcB, int n_sr
     load_padded_batch<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
         d_buf_B, d_srcB, n_src, padded, n_batch);
     GPU_NTT_Inplace(d_buf_A, d_fwd_table, modulus, make_cfg(FORWARD, s), 2 * n_batch);
+#endif
 }
 
 void BigIntNTTBatch::fwd_A(cudaStream_t s)

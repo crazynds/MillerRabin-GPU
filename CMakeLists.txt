@@ -70,7 +70,8 @@ elseif(MUL_ALG STREQUAL "MUL_FFNT_GPUFFT")
 else()
     set(MUL_BACKEND_SRC
         ${SRC_DIR}/ops/mul/ntt_merge.cu
-        ${SRC_DIR}/lib/gpuntt/ntt_merge_intt_fused.cu)
+        ${SRC_DIR}/lib/gpuntt/ntt_merge_intt_fused.cu
+        ${SRC_DIR}/lib/gpuntt/ntt_merge_ntt_fused.cu)
 endif()
 message(STATUS "MUL_ALG = ${MUL_ALG} → ${MUL_BACKEND_SRC}")
 
@@ -89,6 +90,11 @@ if(MR_NTT_FUSED_PMUL)
     set(MR_NTT_FUSED_PMUL 1)
 else()
     unset(MR_NTT_FUSED_PMUL)
+endif()
+if(MR_NTT_FUSED_PAD)
+    set(MR_NTT_FUSED_PAD 1)
+else()
+    unset(MR_NTT_FUSED_PAD)
 endif()
 configure_file(
     ${SRC_DIR}/config.h.in

@@ -95,6 +95,11 @@
 // Only active for MUL_NTT_MERGE backend.
 #cmakedefine MR_NTT_FUSED_PMUL
 
+// When defined, the zero-padded gather (load_padded_batch) is fused into the
+// first forward-NTT kernel, saving one full global-memory round-trip per
+// transformed operand. Only active for MUL_NTT_MERGE backend.
+#cmakedefine MR_NTT_FUSED_PAD
+
 /** --------------------------------------------------
       Big-integer multiplication algorithm
       (mont_mul_batch / mont_sq_batch)

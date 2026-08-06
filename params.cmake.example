@@ -128,6 +128,11 @@ set(MUL_ALG MUL_MERGE_GPUNTT)
 # Set to OFF to fall back to the separate pmul_batch + INTT approach.
 set(MR_NTT_FUSED_PMUL  ON)
 
+# Fuse the zero-padded gather into the first forward-NTT kernel, removing the
+# separate load_padded_batch pass (one read + one write over the whole padded
+# buffer per transformed operand). Only effective on MUL_NTT_MERGE backend.
+set(MR_NTT_FUSED_PAD   ON)
+
 # Modular reduction algorithm used in modmul/modsq:
 #   MOD_RED_MONTGOMERY — REDC. Operands live in Montgomery form (x·R mod N).
 #     Conversion to/from Montgomery form adds a small one-time cost per batch,

@@ -39,22 +39,22 @@ struct OpMul
 {
     const Data64 *a;
     const Data64 *b;
-    Data64 modulus_val;
+    Modulus64 modulus;
 
     __device__ __forceinline__ Data64 operator[](location_t idx) const
     {
-        return (Data64)((__uint128_t)a[idx] * b[idx] % (__uint128_t)modulus_val);
+        return OPERATOR_GPU<Data64>::mult(a[idx], b[idx], modulus);
     }
 };
 
 struct OpSq
 {
     const Data64 *a;
-    Data64 modulus_val;
+    Modulus64 modulus;
 
     __device__ __forceinline__ Data64 operator[](location_t idx) const
     {
-        return (Data64)((__uint128_t)a[idx] * a[idx] % (__uint128_t)modulus_val);
+        return OPERATOR_GPU<Data64>::mult(a[idx], a[idx], modulus);
     }
 };
 
@@ -66,12 +66,12 @@ struct OpSq
 // become compile-time constants: the #pragma unroll below then fully unrolls and
 // the address arithmetic collapses to immediates.  Only n_power < 11 reaches this
 // kernel, so 10 instantiations cover every case (see launch_low_ring_fused).
-template <typename Op, int N_POWER>
+template <typename Op, int N_POWER, bool RPC>
 __global__ static void InverseCoreLowRing_Fused(
     Data64 *polynomial_out,
     const Root64 *__restrict__ inverse_root_of_unity_table,
     Modulus64 modulus,
-    Ninverse64 n_inverse, bool reduction_poly_check, int total_batch,
+    Ninverse64 n_inverse, int total_batch,
     Op op)
 {
     const int idx_x = threadIdx.x;
@@ -113,14 +113,10 @@ __global__ static void InverseCoreLowRing_Fused(
     for (int lp = 0; lp < loops; lp++)
     {
         int group_in_shared_address = in_shared_address + offset;
-        if (reduction_poly_check)
-        {
+        if constexpr (RPC)
             current_root_index = (idx_x >> t_2);
-        }
         else
-        {
             current_root_index = m + (idx_x >> t_2);
-        }
 
         GentlemanSandeUnit(shared_memory[group_in_shared_address],
                            shared_memory[group_in_shared_address + t],
@@ -130,18 +126,18 @@ __global__ static void InverseCoreLowRing_Fused(
         t = t << 1;
         t_2 += 1;
         t_ += 1;
-        m >>= 1;
+        if constexpr (!RPC)
+            m >>= 1;
         if (lp + 1 < loops)
             in_shared_address = ((shared_addresss >> t_) << t_) + shared_addresss;
         __syncthreads();
     }
-    __syncthreads();
-
-    Data64 out0 = OPERATOR_GPU<Data64>::mult(shared_memory[shared_address0], n_inverse, modulus_reg);
-    Data64 out1 = OPERATOR_GPU<Data64>::mult(shared_memory[shared_address1], n_inverse, modulus_reg);
 
     if (active_batch)
     {
+        Data64 out0 = OPERATOR_GPU<Data64>::mult(shared_memory[shared_address0], n_inverse, modulus_reg);
+        Data64 out1 = OPERATOR_GPU<Data64>::mult(shared_memory[shared_address1], n_inverse, modulus_reg);
+
         polynomial_out[global_address0] = out0;
         polynomial_out[global_address1] = out1;
     }
@@ -155,13 +151,13 @@ __global__ static void InverseCoreLowRing_Fused(
 // shared_index.  Templating both makes `loops`, the `offset / (1 << (OIC - 1))`
 // divisor and every per-iteration shift amount compile-time constants — the
 // `((x >> t_) << t_)` pairs collapse into single masked ops.
-template <typename Op, int OIC, int SI>
+template <typename Op, int OIC, int SI, bool RPC>
 __global__ static void InverseCore_Fused(
     Data64 *polynomial_out,
     const Root64 *__restrict__ inverse_root_of_unity_table,
     Modulus64 modulus, int logm, int k,
     int N_power, Ninverse64 n_inverse,
-    bool last_kernel, bool reduction_poly_check,
+    bool last_kernel,
     Op op)
 {
     constexpr int outer_iteration_count = OIC;
@@ -211,14 +207,10 @@ __global__ static void InverseCore_Fused(
     for (int lp = 0; lp < loops; lp++)
     {
         __syncthreads();
-        if (reduction_poly_check)
-        {
+        if constexpr (RPC)
             current_root_index = (omega_addresss >> t_2);
-        }
         else
-        {
             current_root_index = m + (omega_addresss >> t_2);
-        }
 
         GentlemanSandeUnit(shared_memory[in_shared_address],
                            shared_memory[in_shared_address + t],
@@ -228,7 +220,8 @@ __global__ static void InverseCore_Fused(
         t = t << 1;
         t_2 += 1;
         t_ += 1;
-        m >>= 1;
+        if constexpr (!RPC)
+            m >>= 1;
         in_shared_address = ((shared_addresss >> t_) << t_) + shared_addresss;
     }
     __syncthreads();
@@ -251,13 +244,13 @@ __global__ static void InverseCore_Fused(
 // InverseCore_ — fused first-pass kernel for n_power >= 25 (transposed block layout)
 // ─────────────────────────────────────────────────────────────────────────────
 
-template <typename Op, int OIC, int SI>
+template <typename Op, int OIC, int SI, bool RPC>
 __global__ static void InverseCore__Fused(
     Data64 *polynomial_out,
     const Root64 *__restrict__ inverse_root_of_unity_table,
     Modulus64 modulus, int logm, int k,
     int N_power, Ninverse64 n_inverse,
-    bool last_kernel, bool reduction_poly_check,
+    bool last_kernel,
     Op op)
 {
     constexpr int outer_iteration_count = OIC;
@@ -308,14 +301,10 @@ __global__ static void InverseCore__Fused(
     for (int lp = 0; lp < loops; lp++)
     {
         __syncthreads();
-        if (reduction_poly_check)
-        {
+        if constexpr (RPC)
             current_root_index = (omega_addresss >> t_2);
-        }
         else
-        {
             current_root_index = m + (omega_addresss >> t_2);
-        }
 
         GentlemanSandeUnit(shared_memory[in_shared_address],
                            shared_memory[in_shared_address + t],
@@ -325,7 +314,8 @@ __global__ static void InverseCore__Fused(
         t = t << 1;
         t_2 += 1;
         t_ += 1;
-        m >>= 1;
+        if constexpr (!RPC)
+            m >>= 1;
         in_shared_address = ((shared_addresss >> t_) << t_) + shared_addresss;
     }
     __syncthreads();
@@ -349,13 +339,13 @@ __global__ static void InverseCore__Fused(
 // copied here because __global__ template symbols are not exported by the lib).
 // ─────────────────────────────────────────────────────────────────────────────
 
-template <int OIC, int SI>
+template <int OIC, int SI, bool RPC>
 __global__ static void InverseCore_Tail(
     Data64 *polynomial_in, Data64 *polynomial_out,
     const Root64 *__restrict__ inverse_root_of_unity_table,
     Modulus64 modulus, int logm, int k,
     int N_power, Ninverse64 n_inverse,
-    bool last_kernel, bool reduction_poly_check)
+    bool last_kernel)
 {
     constexpr int outer_iteration_count = OIC;
     constexpr int shared_index = SI;
@@ -403,14 +393,10 @@ __global__ static void InverseCore_Tail(
     for (int lp = 0; lp < loops; lp++)
     {
         __syncthreads();
-        if (reduction_poly_check)
-        {
+        if constexpr (RPC)
             current_root_index = (omega_addresss >> t_2);
-        }
         else
-        {
             current_root_index = m + (omega_addresss >> t_2);
-        }
 
         GentlemanSandeUnit(shared_memory[in_shared_address],
                            shared_memory[in_shared_address + t],
@@ -420,7 +406,8 @@ __global__ static void InverseCore_Tail(
         t = t << 1;
         t_2 += 1;
         t_ += 1;
-        m >>= 1;
+        if constexpr (!RPC)
+            m >>= 1;
         in_shared_address = ((shared_addresss >> t_) << t_) + shared_addresss;
     }
     __syncthreads();
@@ -443,6 +430,11 @@ __global__ static void InverseCore_Tail(
 // Shared dispatch logic
 // ─────────────────────────────────────────────────────────────────────────────
 
+// This project always runs X_N_minus, so only that specialisation is
+// instantiated — building both would double an already large template fan-out
+// (Op x OIC x SI) for a branch that never executes.
+static constexpr bool FUSED_RPC = true;
+
 template <typename Op>
 static void dispatch_intt_fused(
     Data64 *device_inout,
@@ -452,11 +444,14 @@ static void dispatch_intt_fused(
     int batch_size,
     Op op)
 {
+    if (cfg.ntt_layout != PerPolynomial)
+        throw std::runtime_error("[fused_intt] only the PerPolynomial layout is supported");
+    if (cfg.reduction_poly != ReductionPolynomial::X_N_minus)
+        throw std::runtime_error("[fused_intt] only ReductionPolynomial::X_N_minus is supported");
+
     auto kernel_params = CreateInverseNTTKernel<Data64>();
     const bool low_ring = (cfg.n_power < 11);
     const bool std_kernel = (cfg.n_power < 25);
-    const bool reduction_poly_check =
-        (cfg.reduction_poly == ReductionPolynomial::X_N_minus);
 
     // Both non-low-ring kernels specialise on (outer_iteration_count, shared_index),
     // so their launches share one nested dispatch.
@@ -464,11 +459,9 @@ static void dispatch_intt_fused(
     {
         dispatch_const<1, MAX_OUTER_ITERATION_COUNT>(
             p.outer_iteration_count, [&](auto oic)
-            {
-                dispatch_const<MIN_SHARED_INDEX, MAX_SHARED_INDEX>(
-                    p.shared_index, [&](auto si)
-                    { launch(oic, si); });
-            });
+            { dispatch_const<MIN_SHARED_INDEX, MAX_SHARED_INDEX>(
+                  p.shared_index, [&](auto si)
+                  { launch(oic, si); }); });
         GPUNTT_CHECK(cudaGetLastError());
     };
 
@@ -476,16 +469,15 @@ static void dispatch_intt_fused(
     auto launch_tail = [&](const KernelConfig &p)
     {
         dispatch_pass(p, [&](auto oic, auto si)
-                      {
-            InverseCore_Tail<oic.value, si.value><<<
-                dim3(p.griddim_x, p.griddim_y, batch_size),
-                dim3(p.blockdim_x, p.blockdim_y),
-                p.shared_memory, cfg.stream>>>(
-                device_inout, device_inout,
-                root_of_unity_table, modulus,
-                p.logm, p.k,
-                cfg.n_power, cfg.mod_inverse,
-                p.not_last_kernel, reduction_poly_check); });
+                      { InverseCore_Tail<oic.value, si.value, FUSED_RPC><<<
+                            dim3(p.griddim_x, p.griddim_y, batch_size),
+                            dim3(p.blockdim_x, p.blockdim_y),
+                            p.shared_memory, cfg.stream>>>(
+                            device_inout, device_inout,
+                            root_of_unity_table, modulus,
+                            p.logm, p.k,
+                            cfg.n_power, cfg.mod_inverse,
+                            p.not_last_kernel); });
     };
 
     if (low_ring)
@@ -496,16 +488,13 @@ static void dispatch_intt_fused(
         int grid_x = (batch_size + p.blockdim_y - 1) / p.blockdim_y;
         dispatch_const<1, MAX_LOW_RING_N_POWER>(
             cfg.n_power, [&](auto np)
-            {
-                InverseCoreLowRing_Fused<Op, np.value><<<
-                    dim3(grid_x, 1, 1),
-                    dim3(p.blockdim_x, p.blockdim_y),
-                    p.shared_memory, cfg.stream>>>(
-                    device_inout,
-                    root_of_unity_table, modulus,
-                    cfg.mod_inverse,
-                    reduction_poly_check, batch_size, op);
-            });
+            { InverseCoreLowRing_Fused<Op, np.value, FUSED_RPC><<<
+                  dim3(grid_x, 1, 1),
+                  dim3(p.blockdim_x, p.blockdim_y),
+                  p.shared_memory, cfg.stream>>>(
+                  device_inout,
+                  root_of_unity_table, modulus,
+                  cfg.mod_inverse, batch_size, op); });
         GPUNTT_CHECK(cudaGetLastError());
         return;
     }
@@ -517,7 +506,7 @@ static void dispatch_intt_fused(
         dispatch_pass(p, [&](auto oic, auto si)
                       {
             if (std_kernel)
-                InverseCore_Fused<Op, oic.value, si.value><<<
+                InverseCore_Fused<Op, oic.value, si.value, FUSED_RPC><<<
                     dim3(p.griddim_x, p.griddim_y, batch_size),
                     dim3(p.blockdim_x, p.blockdim_y),
                     p.shared_memory, cfg.stream>>>(
@@ -525,9 +514,9 @@ static void dispatch_intt_fused(
                     root_of_unity_table, modulus,
                     p.logm, p.k,
                     cfg.n_power, cfg.mod_inverse,
-                    p.not_last_kernel, reduction_poly_check, op);
+                    p.not_last_kernel, op);
             else
-                InverseCore__Fused<Op, oic.value, si.value><<<
+                InverseCore__Fused<Op, oic.value, si.value, FUSED_RPC><<<
                     dim3(p.griddim_x, p.griddim_y, batch_size),
                     dim3(p.blockdim_x, p.blockdim_y),
                     p.shared_memory, cfg.stream>>>(
@@ -535,7 +524,7 @@ static void dispatch_intt_fused(
                     root_of_unity_table, modulus,
                     p.logm, p.k,
                     cfg.n_power, cfg.mod_inverse,
-                    p.not_last_kernel, reduction_poly_check, op); });
+                    p.not_last_kernel, op); });
     }
 
     for (int i = 1; i < (int)kernel_params[cfg.n_power].size(); i++)
@@ -554,7 +543,7 @@ __host__ void GPU_INTT_Inplace_PreMul(
     ntt_configuration<Data64> cfg,
     int batch_size)
 {
-    OpMul op{device_inout, b, modulus.value};
+    OpMul op{device_inout, b, modulus};
     dispatch_intt_fused(device_inout, root_of_unity_table, modulus, cfg, batch_size, op);
 }
 
@@ -565,6 +554,6 @@ __host__ void GPU_INTT_Inplace_PreSq(
     ntt_configuration<Data64> cfg,
     int batch_size)
 {
-    OpSq op{device_inout, modulus.value};
+    OpSq op{device_inout, modulus};
     dispatch_intt_fused(device_inout, root_of_unity_table, modulus, cfg, batch_size, op);
 }
