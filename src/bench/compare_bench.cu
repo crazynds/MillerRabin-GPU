@@ -56,7 +56,7 @@ void run_compare_bench(const CompareBenchOptions &opts)
             printf("  Running GPU throughput...\n");
             fflush(stdout);
             gpu_thr = run_gpu_throughput(N, opts.throughput_timeout_s, 2, gpu_items);
-            printf("  GPU throughput: %.2f checks/sec\n", gpu_thr.per_sec());
+            printf("  GPU throughput: %.2f checks/hour\n", gpu_thr.per_hour());
             fflush(stdout);
         }
 
@@ -65,7 +65,7 @@ void run_compare_bench(const CompareBenchOptions &opts)
                 printf("  Running CPU throughput (%d thread(s))...\n", t);
                 fflush(stdout);
                 cpu_thr[t] = run_cpu_throughput(N, opts.throughput_timeout_s, t);
-                printf("  CPU (%d thr) throughput: %.2f checks/sec\n", t, cpu_thr[t].per_sec());
+                printf("  CPU (%d thr) throughput: %.2f checks/hour\n", t, cpu_thr[t].per_hour());
                 fflush(stdout);
             }
         }
@@ -102,7 +102,7 @@ void run_compare_bench(const CompareBenchOptions &opts)
     // ── Final report ─────────────────────────────────────────────────────────
     printf("\n=== Final report (%d-digit candidate) ===\n", opts.digits);
     if (!opts.skip_phase1) {
-        printf(" -- Throughput: single-witness checks/sec (batched) --\n");
+        printf(" -- Throughput: single-witness checks/hour (batched) --\n");
         if (!opts.cpu_only)
             print_throughput_line("GPU", gpu_thr);
         if (!opts.gpu_only) {

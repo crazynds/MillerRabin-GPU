@@ -12,6 +12,7 @@ struct ThroughputStats {
     double elapsed_s = 0.0;   // wall-clock time actually spent
 
     double per_sec() const { return elapsed_s > 0.0 ? count / elapsed_s : 0.0; }
+    double per_hour() const { return per_sec() * 3600.0; }
 };
 
 // Accumulated result of a "run N single-shot latency probes" phase.
@@ -34,8 +35,8 @@ struct LatencyStats {
 
 inline void print_throughput_line(const char *label, const ThroughputStats &s)
 {
-    printf("  %-18s %10lld tests in %8.2fs   =>  %10.2f tests/s\n",
-           label, s.count, s.elapsed_s, s.per_sec());
+    printf("  %-18s %10lld tests in %8.2fs   =>  %14.2f tests/h\n",
+           label, s.count, s.elapsed_s, s.per_hour());
 }
 
 inline void print_latency_line(const char *label, const LatencyStats &s)
