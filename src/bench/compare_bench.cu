@@ -18,6 +18,11 @@ void run_compare_bench(const CompareBenchOptions &opts)
         cpu_lo = cpu_hi = opts.cpu_threads_fixed;
     }
 
+    // Phase 2 (single-candidate latency) is always single-threaded, so its
+    // result is identical for every thread count — running it under
+    // --do=Ncpu with N > 1 would just repeat the same 1-thread test.
+    bool skip_phase2 = opts.skip_phase2 || (opts.cpu_only && opts.cpu_threads_fixed > 1);
+
     const char *title = opts.gpu_only ? "GPU-only" : (opts.cpu_only ? "CPU-only" : "GPU vs CPU compare");
     printf("╔══════════════════════════════════════════════════╗\n");
     printf("║  %s benchmark                    ║\n", title);
@@ -71,7 +76,7 @@ void run_compare_bench(const CompareBenchOptions &opts)
     // ── Phase 2: single-candidate latency ───────────────────────────────────
     LatencyStats gpu_lat;
     LatencyStats cpu_lat;
-    if (!opts.skip_phase2) {
+    if (!skip_phase2) {
         printf("\n=== Phase 2: single-candidate latency (%d iters/side) ===\n", opts.single_iters);
         if (!opts.cpu_only) {
             printf("  Running GPU single-candidate test...\n");
@@ -88,7 +93,10 @@ void run_compare_bench(const CompareBenchOptions &opts)
             fflush(stdout);
         }
     } else {
-        printf("\n=== Phase 2: single-candidate latency — skipped ===\n");
+        if (opts.skip_phase2)
+            printf("\n=== Phase 2: single-candidate latency — skipped ===\n");
+        else
+            printf("\n=== Phase 2: single-candidate latency — skipped (always 1-thread; use --do=1cpu to run it) ===\n");
     }
 
     // ── Final report ─────────────────────────────────────────────────────────
@@ -109,7 +117,7 @@ void run_compare_bench(const CompareBenchOptions &opts)
         }
     }
 
-    if (!opts.skip_phase2) {
+    if (!skip_phase2) {
         printf(" -- Latency: single-witness check on one candidate --\n");
         if (!opts.cpu_only)
             print_latency_line("GPU", gpu_lat);
