@@ -1,8 +1,14 @@
-// perf/perf_node.cuh — Profile tree built dynamically at runtime.
-//
-// Each group/operation calls branch() to create children with pre-declared names,
-// accessed later by index (child(int)). No fixed fields per algorithm.
-// The report simply walks the tree — it does not depend on any external struct.
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/perf/perf_node.cuh
+ * ROLE   profile tree built at runtime
+ *
+ * HOW    Each stage calls branch() to declare named children, addressed
+ *        later by index. The report just walks the tree.
+ *
+ * NOTE   No fixed struct per algorithm: Barrett and Montgomery have
+ *        different stage breakdowns, and a tree lets each describe its own
+ *        without the reporting code knowing either.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
 
 #include <string>
@@ -10,21 +16,19 @@
 #include <memory>
 #include <initializer_list>
 #include <cstdio>
-#include "helpers/time_format.h"
+#include "util/time_format.h"
 
 class PerfNode
 {
 public:
     std::string name;
-    double ms = 0.0;       // own time (timed leaves)
-    long long calls = 0;   // number of timed calls
-    std::string note;      // optional annotation (e.g.: bandwidth GB/s)
+    double ms = 0.0;
+    long long calls = 0;
+    std::string note;
     std::vector<std::unique_ptr<PerfNode>> children;
 
     explicit PerfNode(std::string n) : name(std::move(n)) {}
 
-    // Creates and attaches a child (optionally with pre-declared sub-children).
-    // The returned pointer is stable (stored in a unique_ptr).
     PerfNode *branch(const std::string &n,
                      std::initializer_list<std::string> kids = {})
     {
@@ -35,7 +39,6 @@ public:
         return p;
     }
 
-    // Access by index (stable after the tree is built).
     PerfNode *child(int i) { return children[(size_t)i].get(); }
     const PerfNode *child(int i) const { return children[(size_t)i].get(); }
 
@@ -84,7 +87,6 @@ namespace perf_detail
             printf("  %s %12s  %5.1f%% %s\n",
                    label.c_str(), fmt_time_ms((float)ms).c_str(), pct, note);
 
-        // Sorts children by decreasing time.
         std::vector<const PerfNode *> ks;
         for (auto &k : n->children)
             ks.push_back(k.get());
@@ -96,7 +98,7 @@ namespace perf_detail
         for (size_t i = 0; i < ks.size(); i++)
             rec(ks[i], cp, i + 1 == ks.size(), root_ms, lbl_w);
     }
-} // namespace perf_detail
+}
 
 // Prints the entire tree starting from `root` (root = 100%).
 inline void print_perf_tree(const PerfNode &root, int lbl_w = 36)

@@ -1,8 +1,16 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/ops/mul/ntt_merge.cuh
+ * ROLE   big-integer multiplication over the GPU-NTT "merge" transform
+ *
+ * HOW    Buffer layout is buf[batch_i * padded + coeff_j], so one call
+ *        transforms the whole batch. Exact: single prime, integer
+ *        arithmetic, no rounding.
+ *
+ * NOTE   The production default and the most exercised path. Same public
+ *        surface as the other backends (see ops/mul/multiplier.cuh), so the
+ *        reductions and the orchestrator never learn which one is active.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
-// bigint_ntt.cuh — NTT bigint multiply, 16-bit limbs, single prime, n_batch polys.
-//
-// Data layout: buf[batch_i * padded + coeff_j]
-// A single GPU_NTT_Inplace call processes all n_batch polynomials at once.
 
 #include <cstdint>
 #include <vector>
@@ -33,7 +41,7 @@ inline int next_pow2_ntt(int n)
 
 static constexpr int CARRY_PASSES_MUL = 4;
 
-#include "ops/limb_storage.cuh" // LimbT, LIMB_IS_REAL, limb_ld/limb_st (needs Data64)
+#include "ops/limb_storage.cuh"
 
 struct BigIntNTTBatch
 {
@@ -45,31 +53,33 @@ struct BigIntNTTBatch
 
     Root64 *d_fwd_table = nullptr;
     Root64 *d_inv_table = nullptr;
+    Data64 *d_fwd_shoup = nullptr;
+    Data64 *d_inv_shoup = nullptr;
+    Data64 n_inv_shoup = 0;
 
-    // d_buf_A and d_buf_B are contiguous: d_buf_AB[0..n_batch*padded-1] = A,
-    // d_buf_AB[n_batch*padded..2*n_batch*padded-1] = B.
-    // This allows calling GPU_NTT_Inplace(d_buf_A, 2*n_batch) to transform
-    // A and B in a single kernel launch.
-    Data64 *d_buf_AB = nullptr;     // single allocation [2 * n_batch * padded]
-    Data64 *d_buf_A = nullptr;      // points into d_buf_AB
-    Data64 *d_buf_B = nullptr;      // points into d_buf_AB + n_batch * padded
+    Data64 *d_buf_AB = nullptr;
+    Data64 *d_buf_A = nullptr;
+    Data64 *d_buf_B = nullptr;
 #if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
-    Data64 *d_tile_carry = nullptr; // [n_batch * n_tiles] inter-tile carry
-    int    *d_first_tile = nullptr; // [n_batch] first tile with non-zero residual (n_tiles = none)
+    Data64 *d_tile_carry = nullptr;
+    int    *d_first_tile = nullptr;
 #endif
 
     explicit BigIntNTTBatch(int n_limbs_, int n_batch_);
     ~BigIntNTTBatch();
 
-    // Loads d_src [n_batch * n_src] into d_buf_A with zero-pad up to padded, then NTT
-    // Buffer holding the raw INTT coefficients the carry layer reads (= d_buf_A here).
-    LimbT *raw_coeffs() { return reinterpret_cast<LimbT *>(d_buf_A); }
+    RawT *raw_coeffs() { return reinterpret_cast<RawT *>(d_buf_A); }
 
-    void ntt_A(const Data64 *d_src, int n_src, cudaStream_t s = 0);
+    void ntt_A(const LimbT *d_src, int n_src, cudaStream_t s = 0);
+    // Like ntt_A, but the operand is a per-candidate right shift of d_src:
+    // coefficient j reads d_src[cand*n_src + j + bark[cand] + delta], j < n_out.
+    // Only defined for the merge backend with MR_NTT_FUSED_PAD (see MR_NTT_FUSED_SHIFT).
+    void ntt_A_shifted(const LimbT *d_src, const int *d_bark, int delta,
+                       int n_out, int n_src, cudaStream_t s = 0);
     // Same for d_buf_B
-    void ntt_B(const Data64 *d_src, int n_src, cudaStream_t s = 0);
+    void ntt_B(const LimbT *d_src, int n_src, cudaStream_t s = 0);
     // Loads d_srcA into buf_A and d_srcB into buf_B, then a batched NTT (2*n_batch at once)
-    void ntt_AB(const Data64 *d_srcA, const Data64 *d_srcB, int n_src, cudaStream_t s = 0);
+    void ntt_AB(const LimbT *d_srcA, const LimbT *d_srcB, int n_src, cudaStream_t s = 0);
 
     // d_buf_A = d_buf_A * d_buf_B (pointwise)
     void pmul(cudaStream_t s = 0);
@@ -89,9 +99,9 @@ struct BigIntNTTBatch
 
     // Direct O(n²) polynomial convolution — writes to d_buf_A (stride=padded).
     // Alternative to the ntt_AB + pmul_and_intt pair. Only practical for small n_limbs.
-    void schoolbook_mul(const Data64 *d_A, const Data64 *d_B, int n_src, cudaStream_t s = 0);
+    void schoolbook_mul(const LimbT *d_A, const LimbT *d_B, int n_src, cudaStream_t s = 0);
     // O(n²) squaring version — alternative to ntt_A + psq_and_intt.
-    void schoolbook_sq(const Data64 *d_A, int n_src, cudaStream_t s = 0);
+    void schoolbook_sq(const LimbT *d_A, int n_src, cudaStream_t s = 0);
 
     // Copies d_buf_A -> d_out [n_batch * n_out] and normalizes carries
     void carry_to_limbs(LimbT *d_out, int n_out,

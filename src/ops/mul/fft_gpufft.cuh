@@ -1,10 +1,16 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/ops/mul/fft_gpufft.cuh
+ * ROLE   complex FFT (C2C) via GPU-FFT
+ *
+ * HOW    Same shape as the cuFFT backend, but on the GPU-FFT in-place
+ *        transform and its root tables; the inverse already applies the 1/N
+ *        normalization through cfg.mod_inverse.
+ *
+ * NOTE   APPROXIMATE, same mantissa guard. Same public surface as the other
+ *        backends (see ops/mul/multiplier.cuh), so the reductions and the
+ *        orchestrator never learn which one is active.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
-// ops/mul/fft_gpufft.cuh — big-int multiplication backend via GPU-FFT (C2C, "merge").
-//
-// Structure identical to the cuFFT backend (ops/mul/fft_cufft.cuh): approximate (double),
-// padded = 2*fft_len, d_buf_A reinterpreted as complex, round+scatter post-INTT.
-// Differs by using gpufft::GPU_FFT (in-place) + the lib's root tables; the INVERSE
-// already normalizes by 1/N via cfg.mod_inverse.
 
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -30,32 +36,31 @@ inline int limbs_for_digits(int decimal_digits)
 inline int next_pow2_ntt(int n) { int p = 1; while (p < n) p <<= 1; return p; }
 #endif
 
-#include "ops/limb_storage.cuh" // LimbT (needs Data64)
+#include "ops/limb_storage.cuh"
 
 struct FftGpuFftBatch
 {
     int n_limbs, padded, logn, n_batch;
-    int fft_len; // = padded / 2 (FFT size, in complex elements)
+    int fft_len;
 
-    Data64 *d_buf_AB = nullptr;   // [2 * n_batch * padded] = 2*n_batch*fft_len complex
+    Data64 *d_buf_AB = nullptr;
     Data64 *d_buf_A = nullptr;
     Data64 *d_buf_B = nullptr;
-    double *d_real = nullptr;     // [n_batch * padded] real coefficients (post-INTT, stride padded)
-    Data64 *d_cplx_tmp = nullptr; // [n_batch * padded] complex (fwd_A staging)
+    double *d_real = nullptr;
+    Data64 *d_cplx_tmp = nullptr;
 #if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     Data64 *d_tile_carry = nullptr;
-    int    *d_first_tile = nullptr; // [n_batch] first tile with non-zero residual (n_tiles = none)
+    int    *d_first_tile = nullptr;
 #endif
 
-    Complex64 *d_root_fwd = nullptr; // root table (forward)
-    Complex64 *d_root_inv = nullptr; // root table (inverse)
+    Complex64 *d_root_fwd = nullptr;
+    Complex64 *d_root_inv = nullptr;
     int root_len = 0;
-    double n_inv = 1.0; // 1/N to normalize the INVERSE (cfg.mod_inverse)
+    double n_inv = 1.0;
 
     explicit FftGpuFftBatch(int n_limbs_, int n_batch_);
     ~FftGpuFftBatch();
 
-    // Raw real coefficients the carry layer reads (inverse-FFT output, stride padded).
     LimbT *raw_coeffs() { return reinterpret_cast<LimbT *>(d_real); }
 
     void ntt_A(const LimbT *d_src, int n_src, cudaStream_t s = 0);

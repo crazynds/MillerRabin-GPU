@@ -1,4 +1,12 @@
-#include "cpu_witness.h"
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/bench/cpu_witness.cu
+ * ROLE   one Miller-Rabin witness on the CPU
+ *
+ * HOW    mpz_powm for base^d mod N, then up to s-1 squarings looking for
+ *        N-1. Deliberately the same unit of work as one GPU witness call —
+ *        see cpu_witness.h.
+ * ───────────────────────────────────────────────────────────────────────────── */
+#include "bench/cpu_witness.h"
 
 void cpu_witness_ctx_init(CpuWitnessCtx &ctx, const mpz_t N)
 {

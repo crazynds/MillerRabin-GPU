@@ -1,15 +1,20 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/bench/bench_common.h
+ * ROLE   stat records shared by the self-benchmark phases
+ *
+ * HOW    Plain structs accumulating counts and wall-clock time.
+ *        Deliberately free of CUDA and GMP so both the GPU and the CPU side
+ *        can include it without dragging in either toolchain.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
-// bench_common.h — shared stat structures for the self-benchmark suite
-// (throughput_bench.*, compare_bench.*). Kept dependency-free (no CUDA, no
-// GMP) so both GPU and CPU sides can include it without pulling extra headers.
 
 #include <cstdio>
 #include <algorithm>
 
 // Accumulated result of a "run as many as possible in T seconds" phase.
 struct ThroughputStats {
-    long long count = 0;      // candidates fully tested (all witnesses)
-    double elapsed_s = 0.0;   // wall-clock time actually spent
+    long long count = 0;
+    double elapsed_s = 0.0;
 
     double per_sec() const { return elapsed_s > 0.0 ? count / elapsed_s : 0.0; }
     double per_hour() const { return per_sec() * 3600.0; }

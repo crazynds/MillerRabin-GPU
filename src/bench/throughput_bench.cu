@@ -1,7 +1,15 @@
-#include "throughput_bench.h"
-#include "cpu_witness.h"
-#include "candidate.cuh"
-#include "miller_rabin_runner.cuh"
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/bench/throughput_bench.cu
+ * ROLE   throughput phase of the self-benchmark
+ *
+ * HOW    Runs single-witness checks back to back until the timeout expires,
+ *        counting completions. The GPU side fills a full batch; the CPU
+ *        side is swept across thread counts by the caller.
+ * ───────────────────────────────────────────────────────────────────────────── */
+#include "bench/throughput_bench.h"
+#include "bench/cpu_witness.h"
+#include "driver/candidate.cuh"
+#include "mr/miller_rabin_runner.cuh"
 #include <chrono>
 #include <thread>
 #include <atomic>
@@ -69,7 +77,7 @@ ThroughputStats run_cpu_throughput(const mpz_t N, int timeout_sec, int n_threads
             count++;
         }
         local_count[idx] = count;
-        local_elapsed_s[idx] = seconds_since(t_local); // this thread's own run window, not the group's
+        local_elapsed_s[idx] = seconds_since(t_local);
         cpu_witness_ctx_clear(ctx);
     };
 
@@ -88,12 +96,8 @@ ThroughputStats run_cpu_throughput(const mpz_t N, int timeout_sec, int n_threads
 
     std::this_thread::sleep_for(std::chrono::seconds(timeout_sec));
     stop.store(true, std::memory_order_relaxed);
-    for (auto &th : threads) th.join(); // waits for each thread's in-flight check to finish
+    for (auto &th : threads) th.join();
 
-    // Each thread ran for its own wall-clock window (offset by its own startup
-    // stagger), so aggregate throughput is the SUM of each thread's own
-    // count/elapsed_s — not total_count divided by one global elapsed time,
-    // which would silently use the slowest thread's window for everyone.
     long long total_count = 0;
     double total_per_sec = 0.0;
     for (int t = 0; t < n_threads; t++) {

@@ -1,8 +1,13 @@
-// ops/shift/shift.cuh — Limb shift/extract (base 2^LIMB_BITS), batched.
-// Operations agnostic to the reduction algorithm; host launchers in shift.cu.
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/ops/shift/shift.cuh
+ * ROLE   batched limb shift and extract
+ *
+ * HOW    Host launchers for the kernels in shift.cu. Independent of the
+ *        reduction algorithm.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
 
-#include "ops/mul/multiplier.cuh" // Data64, LIMB_BITS (via selected backend)
+#include "ops/mul/multiplier.cuh"
 #include <cuda_runtime.h>
 
 namespace ops
@@ -17,6 +22,6 @@ namespace ops
                          int n_out, int n_src, int n_batch, cudaStream_t s);
 
     // dst[cand*padded + j] = (j < n_low) ? src[cand*n_sum + j] : 0 — extracts low limbs.
-    void extract_low(LimbT *dst, const LimbT *src, int n_low, int padded,
+    void extract_low(RawT *dst, const LimbT *src, int n_low, int padded,
                      int n_sum, int n_batch, cudaStream_t s);
 }

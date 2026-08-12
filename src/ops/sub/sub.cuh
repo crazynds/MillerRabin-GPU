@@ -1,28 +1,35 @@
-// ops/sub/sub.cuh — Tiled big-int subtraction (borrow prefix-scan G/P/K), batched.
-//
-// Generic subtractor used by ALL reductions (Barrett finalize and Montgomery
-// cond_sub). Supports separate strides for a/b/out, per-candidate width of b
-// (bk) and unconditional (uncond) or conditional mode (only subtracts if a >= b).
-//
-// The tile buffers (tile_cmp/tile_bstate) must have n_tiles = ceil(W/MR_SUB_TILE)
-// ints per candidate. The borrow_in is resolved INSIDE the apply (fused).
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/ops/sub/sub.cuh
+ * ROLE   batched tiled big-integer subtraction
+ *
+ * HOW    The subtractor every reduction uses (Barrett finalize, Montgomery
+ *        cond_sub). Supports separate strides for a, b and out, a per-
+ *        candidate width for b, and either unconditional or conditional
+ *        mode, the latter subtracting only when a >= b.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
 
-#include "ops/mul/multiplier.cuh" // Data64, LIMB_BITS (via selected backend)
+#include "ops/mul/multiplier.cuh"
 #include <cuda_runtime.h>
 
 namespace ops
 {
-    // Phase 1: per tile, compares a vs b and writes cmp + borrow state.
+    // Phase 1: per tile, the borrow state and — only if need_cmp — the a vs b
+    // comparison. Pass need_cmp = 0 for unconditional subtractions.
     void sub_phase1(const LimbT *a, int sa, const LimbT *b, int sb,
                     const int *bk, int W, int *tile_cmp, int *tile_bstate,
-                    int n_batch, cudaStream_t s);
+                    int need_cmp, int n_batch, cudaStream_t s);
 
-    // Phase 2 (fused with resolve): out = a − b with correct tiled borrow.
-    // uncond != 0 ⇒ always subtracts; otherwise only when a >= b (no-op otherwise).
+    // Resolve: per-tile borrow_in into tile_bin (-1 ⇒ a < b, subtraction skipped).
+    // uncond != 0 ⇒ always subtracts and tile_cmp is not read.
+    void sub_resolve(const int *tile_cmp, const int *tile_bstate, signed char *tile_bin,
+                     int W, int uncond, int n_batch, cudaStream_t s);
+
+    // Apply: out = a − b using the resolved per-tile borrow_in. Where tile_bin is
+    // -1 the block is a no-op, so in-place callers keep `a` untouched.
     void sub_apply(LimbT *out, int so, const LimbT *a, int sa, const LimbT *b, int sb,
-                   const int *bk, int W, const int *tile_cmp, const int *tile_bstate,
-                   int uncond, int n_batch, cudaStream_t s);
+                   const int *bk, int W, const signed char *tile_bin,
+                   int n_batch, cudaStream_t s);
 
     // out[cand*out_limbs + j] = (j < W) ? r[cand*W + j] : 0 — copies low limbs.
     void copy_low(LimbT *out, const LimbT *r, int out_limbs, int W,

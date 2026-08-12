@@ -1,9 +1,11 @@
-// perf/perf_timer.cuh — GPU stopwatch based on a ring of CUDA events.
-//
-// start()/stop(node) record markers on the stream WITHOUT synchronizing; flush() synchronizes
-// ONCE and accumulates each interval into the corresponding PerfNode. Same scheme as the
-// old TSTART/TSTOP, but the target is a PerfNode* (dynamic graph) instead of a
-// fixed struct field.
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/perf/perf_timer.cuh
+ * ROLE   GPU stopwatch over a ring of CUDA events
+ *
+ * HOW    Records start/stop event pairs into a ring buffer and only
+ *        synchronizes when flushing, so timing a stage does not serialize
+ *        the pipeline that is being timed.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
 
 #include <cuda_runtime.h>
@@ -14,7 +16,7 @@
 class PerfTimer
 {
 public:
-    static constexpr int RING = 64; // markers per public call (slack for long pipelines)
+    static constexpr int RING = 64;
 
     void init()
     {

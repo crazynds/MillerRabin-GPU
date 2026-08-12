@@ -1,17 +1,17 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/ops/mul/fft_cufft.cuh
+ * ROLE   complex FFT via cuFFT
+ *
+ * HOW    Double-precision complex transform, padded = 2*fft_len, with a
+ *        round-and-scatter pass after the inverse to get integers back.
+ *
+ * NOTE   APPROXIMATE. Correct only while the largest coefficient fits the
+ *        52-bit mantissa; the constructor guards that and refuses the
+ *        configuration otherwise. Same public surface as the other backends
+ *        (see ops/mul/multiplier.cuh), so the reductions and the
+ *        orchestrator never learn which one is active.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
-// ops/mul/fft_cufft.cuh — big-int multiplication backend via complex FFT (cuFFT).
-//
-// Same public interface as BigIntNTTBatch (see ops/mul/multiplier.cuh). Differs
-// by being APPROXIMATE: uses double-complex, so the rounding of the coefficients
-// is only correct as long as the largest coefficient fits in the 52-bit mantissa
-// (precision guard in the constructor).
-//
-// Layout (trick to reuse the generic precomputation of BatchModCtx):
-//   padded = 2 * fft_len  (Data64 units). d_buf_A is reinterpreted as
-//   cufftDoubleComplex[fft_len] per polynomial → the generic memcpy that caches the
-//   transform (d_ntt_N/d_ntt_mu) copies exactly the complex bytes.
-//   After intt_A, we round to integers and scatter into d_buf_A (stride
-//   padded) so the shared carry (ops/carry) works as in the NTT backends.
 
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -46,38 +46,31 @@ inline int next_pow2_ntt(int n)
 }
 #endif
 
-#include "ops/limb_storage.cuh" // LimbT (needs Data64)
+#include "ops/limb_storage.cuh"
 
 struct FftCuFFTBatch
 {
     int n_limbs, padded, logn, n_batch;
-    int fft_len;  // real-FFT length (real points). padded = 2*fft_len (Data64).
-    int spec_len; // = fft_len/2 + 1: # of independent complex outputs (Hermitian R2C).
+    int fft_len;
+    int spec_len;
 
-    // REAL-FFT layout (R2C / C2R):
-    //   • d_in [2*n_batch*fft_len] doubles — zero-padded real INPUT (A,B), distance fft_len.
-    //   • d_buf_A/B — Hermitian spectra (spec_len complex), stored at distance fft_len
-    //     complex (= padded Data64) so the generic d_ntt_N cache (stride padded) matches.
-    //   • d_real [n_batch*padded] doubles — real OUTPUT of C2R = raw_coeffs(), stride padded.
-    Data64 *d_buf_AB = nullptr; // [2 * n_batch * padded] Data64 (A,B spectra, distance fft_len cplx)
-    Data64 *d_buf_A = nullptr;  // = d_buf_AB
-    Data64 *d_buf_B = nullptr;  // = d_buf_AB + n_batch*padded
-    double *d_in = nullptr;     // [2 * n_batch * fft_len] real input (distance fft_len)
-    double *d_real = nullptr;   // [n_batch * padded] real output (raw_coeffs(), stride padded)
+    Data64 *d_buf_AB = nullptr;
+    Data64 *d_buf_A = nullptr;
+    Data64 *d_buf_B = nullptr;
+    double *d_in = nullptr;
+    double *d_real = nullptr;
 #if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     Data64 *d_tile_carry = nullptr;
-    int    *d_first_tile = nullptr; // [n_batch] first tile with non-zero residual (n_tiles = none)
+    int    *d_first_tile = nullptr;
 #endif
 
-    cufftHandle plan_r2c_n = 0;  // D2Z batch = n_batch
-    cufftHandle plan_r2c_2n = 0; // D2Z batch = 2*n_batch
-    cufftHandle plan_c2r_n = 0;  // Z2D batch = n_batch
+    cufftHandle plan_r2c_n = 0;
+    cufftHandle plan_r2c_2n = 0;
+    cufftHandle plan_c2r_n = 0;
 
     explicit FftCuFFTBatch(int n_limbs_, int n_batch_);
     ~FftCuFFTBatch();
 
-    // Buffer holding the raw (un-normalized, scaled) real coefficients the carry
-    // layer reads — the inverse-FFT output, stride = padded. NOT the complex d_buf_A.
     LimbT *raw_coeffs() { return reinterpret_cast<LimbT *>(d_real); }
 
     // Forward transforms

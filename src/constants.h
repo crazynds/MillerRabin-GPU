@@ -1,4 +1,12 @@
-// ── Carry normalization ───────────────────────────────────────────────────────
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/constants.h
+ * ROLE   the #define values the params.cmake selectors resolve to
+ *
+ * HOW    One numeric id per algorithm choice (carry normalization,
+ *        multiplication backend, modular reduction), so config.h can
+ *        compare them with #if. Kept apart from config.h because config.h
+ *        is generated and this is not.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #define CARRY_ALG_SINGLE_TILE 1
 #define CARRY_ALG_MULTI_TILE 2
 #define CARRY_ALG_SEQUENTIAL 3

@@ -1,28 +1,19 @@
-// ops/mul/ntt_4step.cu — implementation of the GPU-NTT "4-step" (radix) NTT backend.
-//
-// Pipeline (see the library examples in example/ntt_4step/):
-//   forward(src→dst):  Transpose(src→dst) · 4STEP_NTT(dst→src,FWD) · Transpose(src→dst)
-//                      → result in dst (3 ops, buffer swap).
-//   inverse(buf,other): 4STEP_NTT(buf→other,INV) · Transpose(other→buf)
-//                      → result in buf (2 ops).
-//
-// Uses the RNS variant of GPU_4STEP_NTT (modulus/ninverse on the device, mod_count=1),
-// which is the path exercised by GPU-NTT's own tests/benchmarks.
-
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/ops/mul/ntt_4step.cu
+ * ROLE   big-integer multiplication over the GPU-NTT "4-step" transform
+ *
+ * HOW    Allocates the transform buffers and root tables and drives the
+ *        library 4-step calls. Does not carry the fused gather or the Shoup
+ *        butterflies — those live only in the merge backend.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #include "config.h"
 #include "ops/mul/ntt_4step.cuh"
 #include "ops/mul/ntt_check.cuh"
-#include "gpuntt/ntt_4step/ntt_4step_cpu.cuh" // NTTParameters4Step uses this generation header
+#include "gpuntt/ntt_4step/ntt_4step_cpu.cuh"
 #include <stdexcept>
 #include <string>
+#include "util/cuda_check.cuh"
 
-#define CU(expr)                                                                                  \
-    do                                                                                            \
-    {                                                                                             \
-        cudaError_t _e = (expr);                                                                  \
-        if (_e != cudaSuccess)                                                                    \
-            throw std::runtime_error(std::string("[CUDA] " #expr ": ") + cudaGetErrorString(_e)); \
-    } while (0)
 
 static constexpr int CARRY_TILE = MR_CARRY_TILE;
 
@@ -141,7 +132,6 @@ Ntt4StepBatch::Ntt4StepBatch(int n_limbs_, int n_batch_)
 
     check_ntt_precision(padded, p_val);
 
-    // n1/n2 tables via generator; W table copied directly (same convention as the example).
     auto h_n1f = params.gpu_root_of_unity_table_generator(params.n1_based_root_of_unity_table);
     auto h_n2f = params.gpu_root_of_unity_table_generator(params.n2_based_root_of_unity_table);
     auto h_n1i = params.gpu_root_of_unity_table_generator(params.n1_based_inverse_root_of_unity_table);
@@ -165,7 +155,6 @@ Ntt4StepBatch::Ntt4StepBatch(int n_limbs_, int n_batch_)
     CU(cudaMemcpy(d_n2_inv, h_n2i.data(), n2b, cudaMemcpyHostToDevice));
     CU(cudaMemcpy(d_W_inv, params.W_inverse_root_of_unity_table.data(), wb, cudaMemcpyHostToDevice));
 
-    // modulus / ninverse on the device (RNS, mod_count=1).
     CU(cudaMalloc(&d_modulus, sizeof(Modulus<Data64>)));
     CU(cudaMalloc(&d_ninverse, sizeof(Ninverse64)));
     Modulus<Data64> mod_h[1] = {modulus};
@@ -223,8 +212,8 @@ void Ntt4StepBatch::transform(Data64 *src, Data64 *dst, bool fwd, int batch, cud
     Root64 *n1t = fwd ? d_n1_fwd : d_n1_inv;
     Root64 *n2t = fwd ? d_n2_fwd : d_n2_inv;
     Root64 *Wt = fwd ? d_W_fwd : d_W_inv;
-    int t1r = fwd ? n1 : n2; // row of the 1st transpose
-    int t1c = fwd ? n2 : n1; // col of the 1st transpose
+    int t1r = fwd ? n1 : n2;
+    int t1c = fwd ? n2 : n1;
     GPU_Transpose(src, dst, t1r, t1c, logn, batch);
     GPU_4STEP_NTT(dst, src, n1t, n2t, Wt, d_modulus, cfg, batch, 1);
     GPU_Transpose(src, dst, n1, n2, logn, batch);
@@ -258,13 +247,11 @@ void Ntt4StepBatch::ntt_AB(const Data64 *d_srcA, const Data64 *d_srcB, int n_src
         d_scratch, d_srcA, n_src, padded, n_batch);
     load_padded_batch<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
         scr_B, d_srcB, n_src, padded, n_batch);
-    // A and B contiguous in d_scratch and d_buf_AB → transform all 2*n_batch at once.
     transform(d_scratch, d_buf_AB, /*fwd=*/true, 2 * n_batch, s);
 }
 
 void Ntt4StepBatch::fwd_A(cudaStream_t s)
 {
-    // Data already in d_buf_A. transform ends in d_scratch → copy back.
     transform(d_buf_A, d_scratch, /*fwd=*/true, n_batch, s);
     CU(cudaMemcpyAsync(d_buf_A, d_scratch, (size_t)n_batch * padded * sizeof(Data64),
                        cudaMemcpyDeviceToDevice, s));
@@ -272,7 +259,6 @@ void Ntt4StepBatch::fwd_A(cudaStream_t s)
 
 void Ntt4StepBatch::intt_A(cudaStream_t s)
 {
-    // Symmetric inverse (3 ops); ends in d_scratch → copy back to d_buf_A.
     transform(d_buf_A, d_scratch, /*fwd=*/false, n_batch, s);
     CU(cudaMemcpyAsync(d_buf_A, d_scratch, (size_t)n_batch * padded * sizeof(Data64),
                        cudaMemcpyDeviceToDevice, s));

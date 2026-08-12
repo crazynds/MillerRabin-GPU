@@ -100,6 +100,38 @@
 // transformed operand. Only active for MUL_NTT_MERGE backend.
 #cmakedefine MR_NTT_FUSED_PAD
 
+// When defined, the Barrett variable right-shift (ops::shift_right_var) is fused
+// into the forward-NTT gather of the operand it feeds, removing one read+write of
+// the shifted operand per Barrett step. Requires MR_NTT_FUSED_PAD, the
+// MUL_MERGE_GPUNTT backend and MOD_RED_BARRETT.
+#cmakedefine MR_NTT_FUSED_SHIFT
+
+// When defined, limb arrays are stored as uint32 instead of uint64. A normalized
+// limb is < 2^LIMB_BITS <= 2^32, so the upper half of every limb word is zero;
+// dropping it halves the bytes moved by every limb-side kernel (carry output,
+// subtract, shift, copy, NTT gather) and by the sliding-window power table.
+// The spectral / raw-INTT coefficients stay 64-bit (RawT). Barrett-only.
+#cmakedefine MR_LIMB32
+
+// When defined, the NTT/INTT butterflies multiply by each twiddle using a
+// precomputed quotient floor(w*2^64/p) (Shoup/Harvey), replacing GPU-NTT's generic
+// Barrett reduction — three 64-bit multiplies instead of three 128-bit ones.
+// The transform kernels are ALU-bound, not bandwidth-bound, so this is where their
+// headroom is. Requires MUL_MERGE_GPUNTT and an NTT prime < 2^63.
+#cmakedefine MR_NTT_SHOUP
+
+// When defined, the NTT/INTT keep coefficients lazily reduced (Harvey): values ride
+// in [0,2p) or [0,4p) between butterflies and are only brought back to [0,p) as the
+// transform ends. One conditional subtract per butterfly instead of three.
+// Requires MR_NTT_SHOUP and an NTT prime with 4p < 2^64.
+#cmakedefine MR_NTT_LAZY
+
+// When defined, the q*p step of the Shoup butterfly is evaluated as shifts and adds
+// using the merge prime's sparse form (p = 2^59 + 2^32 - 2^29 + 1) instead of a 64-bit
+// multiply, trading multiply-pipe pressure for ALU pressure.
+#cmakedefine MR_NTT_SPARSE_P
+
+
 /** --------------------------------------------------
       Big-integer multiplication algorithm
       (mont_mul_batch / mont_sq_batch)

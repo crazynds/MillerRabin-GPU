@@ -1,8 +1,16 @@
-#include "compare_bench.h"
-#include "bench_prime_finder.h"
-#include "throughput_bench.h"
-#include "single_bench.h"
-#include "bench_common.h"
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/bench/compare_bench.cu
+ * ROLE   driver of --bench-compare
+ *
+ * HOW    Generates one candidate, runs the throughput and latency phases on
+ *        both sides and prints the comparison. --do restricts it to a
+ *        single side; --skip-phase-N drops a phase.
+ * ───────────────────────────────────────────────────────────────────────────── */
+#include "bench/compare_bench.h"
+#include "bench/bench_prime_finder.h"
+#include "bench/throughput_bench.h"
+#include "bench/single_bench.h"
+#include "bench/bench_common.h"
 #include <gmp.h>
 #include <cstdio>
 #include <vector>
@@ -18,9 +26,6 @@ void run_compare_bench(const CompareBenchOptions &opts)
         cpu_lo = cpu_hi = opts.cpu_threads_fixed;
     }
 
-    // Phase 2 (single-candidate latency) is always single-threaded, so its
-    // result is identical for every thread count — running it under
-    // --do=Ncpu with N > 1 would just repeat the same 1-thread test.
     bool skip_phase2 = opts.skip_phase2 || (opts.cpu_only && opts.cpu_threads_fixed > 1);
 
     const char *title = opts.gpu_only ? "GPU-only" : (opts.cpu_only ? "CPU-only" : "GPU vs CPU compare");
@@ -47,9 +52,8 @@ void run_compare_bench(const CompareBenchOptions &opts)
     find_bench_candidate(N, opts.digits);
     printf("\n");
 
-    // ── Phase 1: throughput ──────────────────────────────────────────────────
     ThroughputStats gpu_thr;
-    std::vector<ThroughputStats> cpu_thr(cpu_hi + 1); // 1-indexed by thread count
+    std::vector<ThroughputStats> cpu_thr(cpu_hi + 1);
     if (!opts.skip_phase1) {
         printf("=== Phase 1: throughput (%ds/run) ===\n", opts.throughput_timeout_s);
         if (!opts.cpu_only) {
@@ -73,7 +77,6 @@ void run_compare_bench(const CompareBenchOptions &opts)
         printf("=== Phase 1: throughput — skipped ===\n");
     }
 
-    // ── Phase 2: single-candidate latency ───────────────────────────────────
     LatencyStats gpu_lat;
     LatencyStats cpu_lat;
     if (!skip_phase2) {
@@ -99,7 +102,6 @@ void run_compare_bench(const CompareBenchOptions &opts)
             printf("\n=== Phase 2: single-candidate latency — skipped (always 1-thread; use --do=1cpu to run it) ===\n");
     }
 
-    // ── Final report ─────────────────────────────────────────────────────────
     printf("\n=== Final report (%d-digit candidate) ===\n", opts.digits);
     if (!opts.skip_phase1) {
         printf(" -- Throughput: single-witness checks/hour (batched) --\n");

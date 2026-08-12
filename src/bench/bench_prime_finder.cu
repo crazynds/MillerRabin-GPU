@@ -1,4 +1,13 @@
-#include "bench_prime_finder.h"
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/bench/bench_prime_finder.cu
+ * ROLE   random small-factor-free candidate for the benchmarks
+ *
+ * HOW    Sieves the primes below a limit once, then draws odd numbers of
+ *        the requested digit count until one survives trial division by all
+ *        of them. See bench_prime_finder.h for why primality is not
+ *        required.
+ * ───────────────────────────────────────────────────────────────────────────── */
+#include "bench/bench_prime_finder.h"
 #include <vector>
 #include <cstdint>
 #include <cstdio>
@@ -52,8 +61,8 @@ void find_bench_candidate(mpz_t out, int digits, unsigned long trial_limit)
     long long attempts = 0;
     do {
         mpz_urandomb(cand, rng, bits);
-        mpz_setbit(cand, bits - 1); // fix the bit length
-        mpz_setbit(cand, 0);        // force odd
+        mpz_setbit(cand, bits - 1);
+        mpz_setbit(cand, 0);
         attempts++;
     } while (!survives_trial_division(cand, primes));
 

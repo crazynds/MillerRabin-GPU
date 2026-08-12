@@ -1,15 +1,18 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/bench/single_bench.h
+ * ROLE   latency phase: one candidate, one core or a batch of one
+ *
+ * HOW    Measures the wall-clock cost of a single witness check on exactly
+ *        one candidate.
+ *
+ * NOTE   This is the number that matters when a hunter has one fresh
+ *        candidate and wants an answer now, as opposed to throughput_bench,
+ *        which measures how many it can chew through in bulk.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
-// single_bench.h — "single candidate, single core/batch" latency phase.
-//
-// Unlike throughput_bench (which saturates the GPU/CPU with many copies at
-// once), this measures the wall-clock cost of one witness check on exactly
-// ONE candidate: GPU with a batch of 1, CPU on a single thread. This is the
-// number that matters when a prime hunter has just one fresh candidate and
-// wants an answer as fast as possible, rather than how many it can chew
-// through in bulk.
 
 #include <gmp.h>
-#include "bench_common.h"
+#include "bench/bench_common.h"
 
 // Runs one GPU witness check on a single copy of N, `iters` times, and
 // reports min/avg/max latency.

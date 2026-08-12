@@ -1,7 +1,15 @@
-#include "single_bench.h"
-#include "cpu_witness.h"
-#include "candidate.cuh"
-#include "miller_rabin_runner.cuh"
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/bench/single_bench.cu
+ * ROLE   latency phase of the self-benchmark
+ *
+ * HOW    Times one witness check on a single candidate: GPU with a batch of
+ *        one, CPU on one thread. Repeats single_iters times and reports the
+ *        mean.
+ * ───────────────────────────────────────────────────────────────────────────── */
+#include "bench/single_bench.h"
+#include "bench/cpu_witness.h"
+#include "driver/candidate.cuh"
+#include "mr/miller_rabin_runner.cuh"
 #include <chrono>
 
 using hrc = std::chrono::high_resolution_clock;

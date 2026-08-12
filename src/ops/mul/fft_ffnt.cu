@@ -1,17 +1,23 @@
-// ops/mul/fft_ffnt.cu — big-int multiplication via FFNT (GPU-FFT, real negacyclic).
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/ops/mul/fft_ffnt.cu
+ * ROLE   real negacyclic FFT (FFNT) via GPU-FFT
+ *
+ * HOW    A real input of limbs maps to half the complex size (n/2), which
+ *        makes it roughly twice as efficient as the C2C transform for the
+ *        same convolution.
+ *
+ * NOTE   APPROXIMATE, with the same mantissa guard as the other FFT
+ *        backends. Same public surface as the other backends (see
+ *        ops/mul/multiplier.cuh), so the reductions and the orchestrator
+ *        never learn which one is active.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #include "config.h"
 #include "ops/mul/fft_ffnt.cuh"
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "util/cuda_check.cuh"
 
-#define CU(expr)                                                                                  \
-    do                                                                                            \
-    {                                                                                             \
-        cudaError_t _e = (expr);                                                                  \
-        if (_e != cudaSuccess)                                                                    \
-            throw std::runtime_error(std::string("[CUDA] " #expr ": ") + cudaGetErrorString(_e)); \
-    } while (0)
 
 static constexpr int CARRY_TILE = MR_CARRY_TILE;
 
@@ -123,9 +129,6 @@ FftFFNTBatch::FftFFNTBatch(int n_limbs_, int n_batch_)
     std::vector<Complex64> ri = gen.InverseReverseRootTable_ffnt();
     std::vector<Complex64> tw = gen.twist_table_ffnt();
     std::vector<Complex64> ut = gen.untwist_table_ffnt();
-    // INVERSE normalization = 1/(n/2) (the FFNT runs a complex FFT of n/2 points).
-    // Do NOT use gen.n_inverse (= 1/(2n) → result would come out 4× smaller). Value confirmed
-    // by the lib's R_R example: n_inverse_new = 1.0/(n>>1).
     n_inv = 1.0 / (double)(fft_len >> 1);
     (void)gen.n_inverse;
 
@@ -138,7 +141,7 @@ FftFFNTBatch::FftFFNTBatch(int n_limbs_, int n_batch_)
     up(&d_twist, tw);
     up(&d_untwist, ut);
 
-    const size_t pb = (size_t)n_batch * padded * sizeof(Data64); // = n_batch*(n/2) complex
+    const size_t pb = (size_t)n_batch * padded * sizeof(Data64);
     CU(cudaMalloc(&d_buf_AB, 2 * pb));
     d_buf_A = d_buf_AB;
     d_buf_B = d_buf_AB + (size_t)n_batch * padded;
@@ -203,7 +206,7 @@ void FftFFNTBatch::ntt_AB(const LimbT *d_srcA, const LimbT *d_srcB, int n_src, c
     double *rB = d_real + (size_t)n_batch * fft_len;
     load_real<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_real, d_srcA, n_src, fft_len, n_batch);
     load_real<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(rB, d_srcB, n_src, fft_len, n_batch);
-    run_ffnt(d_real, d_buf_A, /*fwd=*/true, 2 * n_batch, s); // A,B contiguous (real and temp)
+    run_ffnt(d_real, d_buf_A, /*fwd=*/true, 2 * n_batch, s);
 }
 
 void FftFFNTBatch::fwd_A(cudaStream_t s)
@@ -235,10 +238,6 @@ void FftFFNTBatch::pmul_ext(const Data64 *d_ext, cudaStream_t s)
 
 void FftFFNTBatch::intt_A(cudaStream_t s)
 {
-    // Inverse FFNT leaves the (un-normalized, scaled) real coefficients in d_real,
-    // which IS raw_coeffs() — the carry layer reads them directly as double.
-    // No round_scatter: the double→int rounding/clamp now happens inside limb_ld
-    // at the carry boundary (exact, since coefficients are < 2^52).
     run_ffnt(d_real, d_buf_A, /*fwd=*/false, n_batch, s);
 }
 

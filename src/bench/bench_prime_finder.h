@@ -1,15 +1,17 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/bench/bench_prime_finder.h
+ * ROLE   random workload candidate for the self-benchmark
+ *
+ * HOW    Draws an odd number of `digits` decimal digits and rejects small
+ *        prime factors.
+ *
+ * NOTE   It is deliberately not required to be prime. A real hunt filters
+ *        small factors cheaply before paying for Miller-Rabin, so this is
+ *        exactly the workload the benchmark should represent. Demanding a
+ *        real prime would make setup pay for a full MR run — and
+ *        increasingly often, since prime density falls as 1/ln(N).
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
-// bench_prime_finder.h — picks a random candidate for the self-benchmark
-// suite: `digits` decimal digits, odd, and free of small prime factors.
-//
-// It is deliberately NOT required to be an actual prime — a real
-// prime-hunting pipeline already filters out numbers with small factors
-// (cheap) before ever invoking the expensive Miller-Rabin test, and that is
-// exactly the workload this candidate represents. Requiring genuine
-// primality would make candidate generation itself pay for a full
-// Miller-Rabin run (and, at high digit counts, an increasingly unlikely
-// one — prime density drops as 1/ln(N)) which defeats the point of a setup
-// step that should be near-instant regardless of `digits`.
 
 #include <gmp.h>
 

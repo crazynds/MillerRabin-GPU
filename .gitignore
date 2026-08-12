@@ -11,3 +11,4 @@ src/config.h
 *.o
 *.obj
 .DS_Store
+prof/

@@ -1,33 +1,29 @@
-// ops/mul/fft_cufft.cu — big-int multiplication via REAL FFT (cuFFT R2C/C2R, double).
-//
-// Uses cufftExecD2Z (forward, real→Hermitian complex) and cufftExecZ2D (inverse,
-// Hermitian complex→real). A real FFT of fft_len points has only spec_len=fft_len/2+1
-// independent complex outputs, so this does ~half the work/memory of the old C2C path.
-//
-// Convolution: D2Z(a) .* D2Z(b) → Z2D = fft_len · cyclic_conv(a,b). With fft_len ≥
-// 2·n_limbs the cyclic conv equals the linear product. cuFFT transforms are
-// un-normalized, so the 1/fft_len factor is folded into the pointwise multiply
-// (every intt is preceded by a pointwise) — Z2D then writes the final reals straight
-// into d_real (= raw_coeffs()), no extra scale pass.
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/ops/mul/fft_cufft.cu
+ * ROLE   complex FFT via cuFFT
+ *
+ * HOW    Double-precision complex transform, padded = 2*fft_len, with a
+ *        round-and-scatter pass after the inverse to get integers back.
+ *
+ * NOTE   APPROXIMATE. Correct only while the largest coefficient fits the
+ *        52-bit mantissa; the constructor guards that and refuses the
+ *        configuration otherwise. Same public surface as the other backends
+ *        (see ops/mul/multiplier.cuh), so the reductions and the
+ *        orchestrator never learn which one is active.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #include "config.h"
 #include "ops/mul/fft_cufft.cuh"
 #include <cuComplex.h>
 #include <stdexcept>
 #include <string>
+#include "util/cuda_check.cuh"
 
-#define CU(expr)                                                                                  \
-    do                                                                                            \
-    {                                                                                             \
-        cudaError_t _e = (expr);                                                                  \
-        if (_e != cudaSuccess)                                                                    \
-            throw std::runtime_error(std::string("[CUDA] " #expr ": ") + cudaGetErrorString(_e)); \
-    } while (0)
 
-#define CUFFT_CHECK(expr)                                                                             \
-    do                                                                                                \
-    {                                                                                                 \
-        cufftResult _r = (expr);                                                                      \
-        if (_r != CUFFT_SUCCESS)                                                                      \
+#define CUFFT_CHECK(expr) \
+    do \
+    { \
+        cufftResult _r = (expr); \
+        if (_r != CUFFT_SUCCESS) \
             throw std::runtime_error(std::string("[cuFFT] " #expr " failed: ") + std::to_string(_r)); \
     } while (0)
 
@@ -151,19 +147,16 @@ FftCuFFTBatch::FftCuFFTBatch(int n_limbs_, int n_batch_)
       fft_len(next_pow2_ntt(2 * n_limbs_)),
       spec_len(next_pow2_ntt(2 * n_limbs_) / 2 + 1)
 {
-    // Precision guard: each convolution coefficient = Σ A[i]·B[k-i], with at
-    // most fft_len terms, each ≤ (2^LIMB_BITS−1)². The double FFT accumulates error
-    // ~ O(log N)·u (u = 2^-53). To round correctly, max_coeff·(margin) < 2^52.
     const double max_coeff = (double)n_limbs * (double)LIMB_MASK * (double)LIMB_MASK;
-    const double err_margin = 4.0 * (double)logn; // conservative growth of the FFT error
-    const double mantissa = 4503599627370496.0;   // 2^52
+    const double err_margin = 4.0 * (double)logn;
+    const double mantissa = 4503599627370496.0;
     if (max_coeff * err_margin >= mantissa)
         throw std::runtime_error(
             "[fft_cufft] insufficient precision: fft_len(" + std::to_string(fft_len) +
             ")·(2^" + std::to_string((int)LIMB_BITS) + "-1)²·~4logN exceeds the 52-bit "
                                                        "mantissa of double. Reduce LIMB_BITS/size or use MUL_MERGE_GPUNTT.");
 
-    const size_t pb = (size_t)n_batch * padded * sizeof(Data64); // = n_batch*fft_len complex
+    const size_t pb = (size_t)n_batch * padded * sizeof(Data64);
     CU(cudaMalloc(&d_buf_AB, 2 * pb));
     d_buf_A = d_buf_AB;
     d_buf_B = d_buf_AB + (size_t)n_batch * padded;
@@ -176,14 +169,10 @@ FftCuFFTBatch::FftCuFFTBatch(int n_limbs_, int n_batch_)
     CU(cudaMalloc(&d_first_tile, (size_t)n_batch * sizeof(int)));
 #endif
 
-    // R2C / C2R plans via cufftPlanMany to control the per-candidate distance:
-    //   D2Z: real in distance fft_len → complex out distance fft_len (≥ spec_len),
-    //        so spectra sit at distance fft_len complex = padded Data64 (matches d_ntt_N).
-    //   Z2D: complex in distance fft_len → real out distance padded (= carry stride).
     int n[1] = {fft_len};
-    int re[1] = {fft_len};   // real embed
-    int ce[1] = {fft_len};   // complex embed
-    int rce[1] = {padded};   // real output embed (Z2D)
+    int re[1] = {fft_len};
+    int ce[1] = {fft_len};
+    int rce[1] = {padded};
     CUFFT_CHECK(cufftPlanMany(&plan_r2c_n, 1, n, re, 1, fft_len, ce, 1, fft_len, CUFFT_D2Z, n_batch));
     CUFFT_CHECK(cufftPlanMany(&plan_r2c_2n, 1, n, re, 1, fft_len, ce, 1, fft_len, CUFFT_D2Z, 2 * n_batch));
     CUFFT_CHECK(cufftPlanMany(&plan_c2r_n, 1, n, ce, 1, fft_len, rce, 1, padded, CUFFT_Z2D, n_batch));
@@ -238,13 +227,11 @@ void FftCuFFTBatch::ntt_AB(const LimbT *d_srcA, const LimbT *d_srcB, int n_src, 
     load_real<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(d_in, d_srcA, n_src, fft_len, n_batch);
     load_real<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(inB, d_srcB, n_src, fft_len, n_batch);
     CUFFT_CHECK(cufftSetStream(plan_r2c_2n, s));
-    CUFFT_CHECK(cufftExecD2Z(plan_r2c_2n, d_in, cplx(d_buf_A))); // A,B spectra contiguous
+    CUFFT_CHECK(cufftExecD2Z(plan_r2c_2n, d_in, cplx(d_buf_A)));
 }
 
 void FftCuFFTBatch::fwd_A(cudaStream_t s)
 {
-    // d_buf_A holds real coefficients (stride padded, from extract_low). Copy into the
-    // real input buffer (distance fft_len), then R2C out-of-place back into d_buf_A.
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
     real2real<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
@@ -281,8 +268,6 @@ void FftCuFFTBatch::pmul_ext(const Data64 *d_ext, cudaStream_t s)
 
 void FftCuFFTBatch::intt_A(cudaStream_t s)
 {
-    // Z2D writes fft_len reals per candidate at distance padded into d_real (= raw_coeffs()).
-    // Normalization already folded into the preceding pointwise; carry rounds via limb_ld.
     CUFFT_CHECK(cufftSetStream(plan_c2r_n, s));
     CUFFT_CHECK(cufftExecZ2D(plan_c2r_n, cplx(d_buf_A), d_real));
 }

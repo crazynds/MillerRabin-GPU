@@ -1,17 +1,22 @@
-// ops/mul/fft_gpufft.cu — big-int multiplication via GPU-FFT (C2C, double).
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/ops/mul/fft_gpufft.cu
+ * ROLE   complex FFT (C2C) via GPU-FFT
+ *
+ * HOW    Same shape as the cuFFT backend, but on the GPU-FFT in-place
+ *        transform and its root tables; the inverse already applies the 1/N
+ *        normalization through cfg.mod_inverse.
+ *
+ * NOTE   APPROXIMATE, same mantissa guard. Same public surface as the other
+ *        backends (see ops/mul/multiplier.cuh), so the reductions and the
+ *        orchestrator never learn which one is active.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #include "config.h"
 #include "ops/mul/fft_gpufft.cuh"
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "util/cuda_check.cuh"
 
-#define CU(expr)                                                                                  \
-    do                                                                                            \
-    {                                                                                             \
-        cudaError_t _e = (expr);                                                                  \
-        if (_e != cudaSuccess)                                                                    \
-            throw std::runtime_error(std::string("[CUDA] " #expr ": ") + cudaGetErrorString(_e)); \
-    } while (0)
 
 static constexpr int CARRY_TILE = MR_CARRY_TILE;
 
@@ -126,15 +131,12 @@ FftGpuFftBatch::FftGpuFftBatch(int n_limbs_, int n_batch_)
             "[fft_gpufft] n_power=" + std::to_string(logn) +
             " > 24 (GPU-FFT C2C limit). Use MUL_MERGE_GPUNTT for larger sizes.");
 
-    // Precision guard (double, 52-bit mantissa) — see fft_cufft.cu.
     const double max_coeff = (double)n_limbs * (double)LIMB_MASK * (double)LIMB_MASK;
     if (max_coeff * (4.0 * (double)logn) >= 4503599627370496.0 /*2^52*/)
         throw std::runtime_error(
             "[fft_gpufft] insufficient precision: fft_len·(2^LIMB_BITS-1)²·~4logN exceeds 2^52. "
             "Reduce LIMB_BITS/size or use MUL_MERGE_GPUNTT.");
 
-    // GPU-FFT generator: operates with operands of size fft_len/2 and n_power=logn
-    // (transform of size fft_len). Root tables and 1/N come from it.
     FFT<Float64> gen(fft_len / 2);
     std::vector<Complex64> fwd = gen.ReverseRootTable();
     std::vector<Complex64> inv = gen.InverseReverseRootTable();
@@ -146,7 +148,7 @@ FftGpuFftBatch::FftGpuFftBatch(int n_limbs_, int n_batch_)
     CU(cudaMemcpy(d_root_fwd, fwd.data(), (size_t)root_len * sizeof(Complex64), cudaMemcpyHostToDevice));
     CU(cudaMemcpy(d_root_inv, inv.data(), inv.size() * sizeof(Complex64), cudaMemcpyHostToDevice));
 
-    const size_t pb = (size_t)n_batch * padded * sizeof(Data64); // = n_batch*fft_len complex
+    const size_t pb = (size_t)n_batch * padded * sizeof(Data64);
     CU(cudaMalloc(&d_buf_AB, 2 * pb));
     d_buf_A = d_buf_AB;
     d_buf_B = d_buf_AB + (size_t)n_batch * padded;
@@ -209,7 +211,7 @@ void FftGpuFftBatch::ntt_AB(const LimbT *d_srcA, const LimbT *d_srcB, int n_src,
     unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
     load_complex<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(reinterpret_cast<double2 *>(d_buf_A), d_srcA, n_src, fft_len, n_batch);
     load_complex<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(reinterpret_cast<double2 *>(d_buf_B), d_srcB, n_src, fft_len, n_batch);
-    run_fft(d_buf_A, /*fwd=*/true, 2 * n_batch, s); // A and B contiguous
+    run_fft(d_buf_A, /*fwd=*/true, 2 * n_batch, s);
 }
 
 void FftGpuFftBatch::fwd_A(cudaStream_t s)
@@ -245,7 +247,6 @@ void FftGpuFftBatch::intt_A(cudaStream_t s)
     run_fft(d_buf_A, /*fwd=*/false, n_batch, s);
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(fft_len + thr - 1) / thr;
-    // Single pass: gather real parts into d_real (= raw_coeffs(), stride padded).
     extract_real<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
         d_real, reinterpret_cast<double2 *>(d_buf_A), fft_len, padded, n_batch);
 }

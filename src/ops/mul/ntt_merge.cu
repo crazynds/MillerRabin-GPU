@@ -1,32 +1,40 @@
-// bigint_ntt.cu
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/ops/mul/ntt_merge.cu
+ * ROLE   big-integer multiplication over the GPU-NTT "merge" transform
+ *
+ * HOW    Builds the twiddle tables once per batch and drives the fused
+ *        entry points in ntt/. The gather, the pointwise stage and the
+ *        Barrett shift all ride inside the transform kernels rather than
+ *        costing separate passes.
+ *
+ * CHANGELOG
+ *   2026-08-11  Builds the Shoup quotient tables (MR_NTT_SHOUP) and routes
+ *               the in-place entry points through the local kernels, so no
+ *               configuration falls back to the stock butterflies.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #include "config.h"
 #include "ops/mul/ntt_merge.cuh"
 #include "ops/mul/ntt_check.cuh"
-#include "lib/gpuntt/ntt_merge_intt_fused.cuh"
-#include "lib/gpuntt/ntt_merge_ntt_fused.cuh"
+#include "ntt/ntt_merge_intt_fused.cuh"
+#include "ntt/ntt_merge_ntt_fused.cuh"
+#include "ntt/shoup_butterfly.cuh"
 #include <stdexcept>
 #include <string>
+#include "util/cuda_check.cuh"
 
-#define CU(expr)                                                                                  \
-    do                                                                                            \
-    {                                                                                             \
-        cudaError_t _e = (expr);                                                                  \
-        if (_e != cudaSuccess)                                                                    \
-            throw std::runtime_error(std::string("[CUDA] " #expr ": ") + cudaGetErrorString(_e)); \
-    } while (0)
 
 // ── NTT kernels ───────────────────────────────────────────────────────────────
 
 #ifndef MR_NTT_FUSED_PAD
 __global__ static void load_padded_batch(Data64 *__restrict__ dst,
-                                         const Data64 *__restrict__ src,
+                                         const LimbT *__restrict__ src,
                                          int n_src, int padded, int n_batch)
 {
     int cand = blockIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (cand >= n_batch || j >= padded)
         return;
-    dst[cand * padded + j] = (j < n_src) ? src[cand * n_src + j] : 0ULL;
+    dst[cand * padded + j] = (j < n_src) ? (Data64)limb_ld(src[cand * n_src + j]) : 0ULL;
 }
 #endif
 
@@ -52,7 +60,6 @@ __global__ static void psq_batch(Data64 *__restrict__ a, int total, Data64 p)
 BigIntNTTBatch::BigIntNTTBatch(int n_limbs_, int n_batch_)
     : n_limbs(n_limbs_), padded(next_pow2_ntt(2 * n_limbs_)), logn(__builtin_ctz(next_pow2_ntt(2 * n_limbs_))), n_batch(n_batch_)
 {
-    // Merge backend spec (GPU-NTT, Data64): logn ∈ [1, 28].
     if (logn < 1 || logn > 28)
         throw std::runtime_error(
             "[ntt_merge] logn=" + std::to_string(logn) +
@@ -64,6 +71,7 @@ BigIntNTTBatch::BigIntNTTBatch(int n_limbs_, int n_batch_)
     modulus = params.modulus;
 
     check_ntt_precision(padded, p_val);
+    check_ntt_padding_efficiency(n_limbs, padded, p_val);
 
     auto fwd_h = params.gpu_root_of_unity_table_generator(params.forward_root_of_unity_table);
     auto inv_h = params.gpu_root_of_unity_table_generator(params.inverse_root_of_unity_table);
@@ -85,12 +93,27 @@ BigIntNTTBatch::BigIntNTTBatch(int n_limbs_, int n_batch_)
 
     CU(cudaMemcpy(d_fwd_table, fwd_h.data(), tbytes, cudaMemcpyHostToDevice));
     CU(cudaMemcpy(d_inv_table, inv_h.data(), tbytes, cudaMemcpyHostToDevice));
+
+#ifdef MR_NTT_SHOUP
+    {
+        auto fwd_q = shoup_table_build(fwd_h, p_val);
+        auto inv_q = shoup_table_build(inv_h, p_val);
+        const size_t qbytes = fwd_q.size() * sizeof(Data64);
+        CU(cudaMalloc(&d_fwd_shoup, qbytes));
+        CU(cudaMalloc(&d_inv_shoup, qbytes));
+        CU(cudaMemcpy(d_fwd_shoup, fwd_q.data(), qbytes, cudaMemcpyHostToDevice));
+        CU(cudaMemcpy(d_inv_shoup, inv_q.data(), qbytes, cudaMemcpyHostToDevice));
+        n_inv_shoup = shoup_scalar((Data64)n_inv, p_val);
+    }
+#endif
 }
 
 BigIntNTTBatch::~BigIntNTTBatch()
 {
     cudaFree(d_fwd_table);
     cudaFree(d_inv_table);
+    cudaFree(d_fwd_shoup);
+    cudaFree(d_inv_shoup);
     cudaFree(d_buf_AB);
 #if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     cudaFree(d_tile_carry);
@@ -110,41 +133,51 @@ ntt_configuration<Data64> BigIntNTTBatch::make_cfg(type t, cudaStream_t s)
         .stream = s};
 }
 
-void BigIntNTTBatch::ntt_A(const Data64 *d_src, int n_src, cudaStream_t s)
+void BigIntNTTBatch::ntt_A(const LimbT *d_src, int n_src, cudaStream_t s)
 {
 #ifdef MR_NTT_FUSED_PAD
-    GPU_NTT_ZeroPadLoad(d_buf_A, d_src, n_src, d_fwd_table, modulus,
+    GPU_NTT_ZeroPadLoad(d_buf_A, d_src, n_src, d_fwd_table, d_fwd_shoup, modulus,
                         make_cfg(FORWARD, s), n_batch);
 #else
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(padded + thr - 1) / thr;
     load_padded_batch<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
         d_buf_A, d_src, n_src, padded, n_batch);
-    GPU_NTT_Inplace(d_buf_A, d_fwd_table, modulus, make_cfg(FORWARD, s), n_batch);
+    GPU_NTT_Inplace_Shoup(d_buf_A, d_fwd_table, d_fwd_shoup, modulus, make_cfg(FORWARD, s), n_batch);
 #endif
 }
 
-void BigIntNTTBatch::ntt_B(const Data64 *d_src, int n_src, cudaStream_t s)
+void BigIntNTTBatch::ntt_A_shifted(const LimbT *d_src, const int *d_bark, int delta,
+                                   int n_out, int n_src, cudaStream_t s)
+{
+#ifdef MR_NTT_FUSED_SHIFT
+    GPU_NTT_ShiftPadLoad(d_buf_A, d_src, d_bark, delta, n_out, n_src,
+                         d_fwd_table, d_fwd_shoup, modulus, make_cfg(FORWARD, s), n_batch);
+#else
+    (void)d_src; (void)d_bark; (void)delta; (void)n_out; (void)n_src; (void)s;
+    throw std::runtime_error("[ntt_merge] ntt_A_shifted requires MR_NTT_FUSED_SHIFT");
+#endif
+}
+
+void BigIntNTTBatch::ntt_B(const LimbT *d_src, int n_src, cudaStream_t s)
 {
 #ifdef MR_NTT_FUSED_PAD
-    GPU_NTT_ZeroPadLoad(d_buf_B, d_src, n_src, d_fwd_table, modulus,
+    GPU_NTT_ZeroPadLoad(d_buf_B, d_src, n_src, d_fwd_table, d_fwd_shoup, modulus,
                         make_cfg(FORWARD, s), n_batch);
 #else
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(padded + thr - 1) / thr;
     load_padded_batch<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
         d_buf_B, d_src, n_src, padded, n_batch);
-    GPU_NTT_Inplace(d_buf_B, d_fwd_table, modulus, make_cfg(FORWARD, s), n_batch);
+    GPU_NTT_Inplace_Shoup(d_buf_B, d_fwd_table, d_fwd_shoup, modulus, make_cfg(FORWARD, s), n_batch);
 #endif
 }
 
-void BigIntNTTBatch::ntt_AB(const Data64 *d_srcA, const Data64 *d_srcB, int n_src, cudaStream_t s)
+void BigIntNTTBatch::ntt_AB(const LimbT *d_srcA, const LimbT *d_srcB, int n_src, cudaStream_t s)
 {
-    // d_buf_A and d_buf_B are contiguous, so the pair transforms in one launch:
-    // candidates [0, n_batch) gather from d_srcA, [n_batch, 2*n_batch) from d_srcB.
 #ifdef MR_NTT_FUSED_PAD
     GPU_NTT_ZeroPadLoad2(d_buf_A, d_srcA, d_srcB, n_src, n_batch,
-                         d_fwd_table, modulus, make_cfg(FORWARD, s), 2 * n_batch);
+                         d_fwd_table, d_fwd_shoup, modulus, make_cfg(FORWARD, s), 2 * n_batch);
 #else
     constexpr int thr = MR_THR_LOAD;
     unsigned bx = (unsigned)(padded + thr - 1) / thr;
@@ -152,13 +185,13 @@ void BigIntNTTBatch::ntt_AB(const Data64 *d_srcA, const Data64 *d_srcB, int n_sr
         d_buf_A, d_srcA, n_src, padded, n_batch);
     load_padded_batch<<<dim3(bx, (unsigned)n_batch), thr, 0, s>>>(
         d_buf_B, d_srcB, n_src, padded, n_batch);
-    GPU_NTT_Inplace(d_buf_A, d_fwd_table, modulus, make_cfg(FORWARD, s), 2 * n_batch);
+    GPU_NTT_Inplace_Shoup(d_buf_A, d_fwd_table, d_fwd_shoup, modulus, make_cfg(FORWARD, s), 2 * n_batch);
 #endif
 }
 
 void BigIntNTTBatch::fwd_A(cudaStream_t s)
 {
-    GPU_NTT_Inplace(d_buf_A, d_fwd_table, modulus, make_cfg(FORWARD, s), n_batch);
+    GPU_NTT_Inplace_Shoup(d_buf_A, d_fwd_table, d_fwd_shoup, modulus, make_cfg(FORWARD, s), n_batch);
 }
 
 void BigIntNTTBatch::pmul(cudaStream_t s)
@@ -187,13 +220,13 @@ void BigIntNTTBatch::pmul_ext(const Data64 *d_ext, cudaStream_t s)
 
 void BigIntNTTBatch::intt_A(cudaStream_t s)
 {
-    GPU_INTT_Inplace(d_buf_A, d_inv_table, modulus, make_cfg(INVERSE, s), n_batch);
+    GPU_INTT_Inplace_Shoup(d_buf_A, d_inv_table, d_inv_shoup, n_inv_shoup, modulus, make_cfg(INVERSE, s), n_batch);
 }
 
 void BigIntNTTBatch::pmul_and_intt(cudaStream_t s)
 {
 #ifdef MR_NTT_FUSED_PMUL
-    GPU_INTT_Inplace_PreMul(d_buf_A, d_buf_B, d_inv_table, modulus, make_cfg(INVERSE, s), n_batch);
+    GPU_INTT_Inplace_PreMul(d_buf_A, d_buf_B, d_inv_table, d_inv_shoup, n_inv_shoup, modulus, make_cfg(INVERSE, s), n_batch);
 #else
     pmul(s);
     intt_A(s);
@@ -203,7 +236,7 @@ void BigIntNTTBatch::pmul_and_intt(cudaStream_t s)
 void BigIntNTTBatch::pmul_ext_and_intt(const Data64 *d_ext, cudaStream_t s)
 {
 #ifdef MR_NTT_FUSED_PMUL
-    GPU_INTT_Inplace_PreMul(d_buf_A, d_ext, d_inv_table, modulus, make_cfg(INVERSE, s), n_batch);
+    GPU_INTT_Inplace_PreMul(d_buf_A, d_ext, d_inv_table, d_inv_shoup, n_inv_shoup, modulus, make_cfg(INVERSE, s), n_batch);
 #else
     pmul_ext(d_ext, s);
     intt_A(s);
@@ -213,7 +246,7 @@ void BigIntNTTBatch::pmul_ext_and_intt(const Data64 *d_ext, cudaStream_t s)
 void BigIntNTTBatch::psq_and_intt(cudaStream_t s)
 {
 #ifdef MR_NTT_FUSED_PMUL
-    GPU_INTT_Inplace_PreSq(d_buf_A, d_inv_table, modulus, make_cfg(INVERSE, s), n_batch);
+    GPU_INTT_Inplace_PreSq(d_buf_A, d_inv_table, d_inv_shoup, n_inv_shoup, modulus, make_cfg(INVERSE, s), n_batch);
 #else
     psq(s);
     intt_A(s);
@@ -232,8 +265,8 @@ void BigIntNTTBatch::psq_and_intt(cudaStream_t s)
 
 __global__ static void schoolbook_mul_kernel(
     Data64 *__restrict__ d_buf_A,
-    const Data64 *__restrict__ d_A,
-    const Data64 *__restrict__ d_B,
+    const LimbT *__restrict__ d_A,
+    const LimbT *__restrict__ d_B,
     int n_limbs, int padded, int n_batch)
 {
     int cand = blockIdx.y;
@@ -247,13 +280,13 @@ __global__ static void schoolbook_mul_kernel(
         return;
     }
 
-    const Data64 *A = d_A + (size_t)cand * n_limbs;
-    const Data64 *B = d_B + (size_t)cand * n_limbs;
+    const LimbT *A = d_A + (size_t)cand * n_limbs;
+    const LimbT *B = d_B + (size_t)cand * n_limbs;
     uint64_t acc = 0;
     int i_lo = (j >= n_limbs) ? j - n_limbs + 1 : 0;
     int i_hi = (j < n_limbs) ? j + 1 : n_limbs;
     for (int i = i_lo; i < i_hi; i++)
-        acc += A[i] * B[j - i];
+        acc += limb_ld(A[i]) * limb_ld(B[j - i]);
     d_buf_A[(size_t)cand * padded + j] = acc;
 }
 
@@ -261,7 +294,7 @@ __global__ static void schoolbook_mul_kernel(
 // except the middle term when j is even.
 __global__ static void schoolbook_sq_kernel(
     Data64 *__restrict__ d_buf_A,
-    const Data64 *__restrict__ d_A,
+    const LimbT *__restrict__ d_A,
     int n_limbs, int padded, int n_batch)
 {
     int cand = blockIdx.y;
@@ -275,25 +308,23 @@ __global__ static void schoolbook_sq_kernel(
         return;
     }
 
-    const Data64 *A = d_A + (size_t)cand * n_limbs;
+    const LimbT *A = d_A + (size_t)cand * n_limbs;
     uint64_t acc = 0;
     int i_lo = (j >= n_limbs) ? j - n_limbs + 1 : 0;
     int i_hi_excl = (j < n_limbs) ? j + 1 : n_limbs;
-    // Pairs (i, j-i) with i < j-i  →  contribute 2*A[i]*A[j-i]
-    int i_cross = (j + 1) / 2; // first i where 2*i >= j
+    int i_cross = (j + 1) / 2;
     for (int i = i_lo; i < i_cross && i < i_hi_excl; i++)
-        acc += 2ULL * A[i] * A[j - i];
-    // Middle term (j even, i == j/2)
+        acc += 2ULL * limb_ld(A[i]) * limb_ld(A[j - i]);
     if (j % 2 == 0)
     {
         int m = j / 2;
         if (m >= i_lo && m < i_hi_excl)
-            acc += A[m] * A[m];
+            acc += limb_ld(A[m]) * limb_ld(A[m]);
     }
     d_buf_A[(size_t)cand * padded + j] = acc;
 }
 
-void BigIntNTTBatch::schoolbook_mul(const Data64 *d_A, const Data64 *d_B, int n_src,
+void BigIntNTTBatch::schoolbook_mul(const LimbT *d_A, const LimbT *d_B, int n_src,
                                     cudaStream_t s)
 {
     constexpr int thr = MR_THR_PMUL;
@@ -302,7 +333,7 @@ void BigIntNTTBatch::schoolbook_mul(const Data64 *d_A, const Data64 *d_B, int n_
         d_buf_A, d_A, d_B, n_src, padded, n_batch);
 }
 
-void BigIntNTTBatch::schoolbook_sq(const Data64 *d_A, int n_src, cudaStream_t s)
+void BigIntNTTBatch::schoolbook_sq(const LimbT *d_A, int n_src, cudaStream_t s)
 {
     constexpr int thr = MR_THR_PMUL;
     unsigned bx = (unsigned)(padded + thr - 1) / thr;

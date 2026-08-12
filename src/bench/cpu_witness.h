@@ -1,12 +1,16 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/bench/cpu_witness.h
+ * ROLE   one Miller-Rabin witness on the CPU
+ *
+ * HOW    Given N-1 = 2^s * d, computes base^d mod N and up to s-1
+ *        squarings, returning pass/fail — the same granularity as the GPU
+ *        gpu_test_witness.
+ *
+ * NOTE   Exists so both sides are timed on the same unit of work.
+ *        mpz_probab_prime_p would instead use its own internal repetition
+ *        count, which corresponds to nothing the GPU does per call.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
-// cpu_witness.h — single-witness Miller-Rabin check on the CPU, mirroring the
-// GPU's gpu_test_witness() granularity exactly: given N-1 = 2^s * d, tests
-// one witness (base^d mod N, then up to s-1 squarings) and returns pass/fail.
-//
-// Exists so the throughput/latency benchmarks compare the same unit of work
-// on both sides — "one modular exponentiation witness check" — rather than
-// mpz_probab_prime_p's internal (and CPU-only) repetition count, which would
-// not correspond to anything the GPU side does per call.
 
 #include <gmp.h>
 

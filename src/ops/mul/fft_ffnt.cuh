@@ -1,19 +1,17 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/ops/mul/fft_ffnt.cuh
+ * ROLE   real negacyclic FFT (FFNT) via GPU-FFT
+ *
+ * HOW    A real input of limbs maps to half the complex size (n/2), which
+ *        makes it roughly twice as efficient as the C2C transform for the
+ *        same convolution.
+ *
+ * NOTE   APPROXIMATE, with the same mantissa guard as the other FFT
+ *        backends. Same public surface as the other backends (see
+ *        ops/mul/multiplier.cuh), so the reductions and the orchestrator
+ *        never learn which one is active.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
-// ops/mul/fft_ffnt.cuh — big-int multiplication backend via FFNT (GPU-FFT).
-//
-// FFNT = Fast Fourier Negacyclic Transform: REAL FFT for convolution mod X^n+1.
-// Real input (limbs) → half the complex size (n/2) → ~2x more efficient than
-// the C2C FFT. APPROXIMATE (double): same precision guard as the other FFT backends.
-//
-// For linear big-int multiplication we use n = fft_len ≥ 2·n_limbs, so the
-// negacyclic convolution does NOT wrap around (high part zero) ⇒ result = linear.
-//
-// Layout (lib contract, from the R_R example):
-//   • real buffer d_real: n contiguous reals per polynomial (coef i at position i).
-//   • transformed domain = device_temp: n/2 complex per polynomial. This is
-//     d_buf_A (reinterpreted), so that padded = n = fft_len (Data64).
-//   • forward: GPU_FFNT(real → temp); pmul on temp; inverse: GPU_FFNT(temp → real).
-//   After the inverse we round the reals and write integers into d_buf_A (carry).
 
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -39,21 +37,21 @@ inline int limbs_for_digits(int decimal_digits)
 inline int next_pow2_ntt(int n) { int p = 1; while (p < n) p <<= 1; return p; }
 #endif
 
-#include "ops/limb_storage.cuh" // LimbT (needs Data64)
+#include "ops/limb_storage.cuh"
 
 struct FftFFNTBatch
 {
     int n_limbs, padded, logn, n_batch;
-    int fft_len; // = n = padded (negacyclic). transformed domain = n/2 complex.
+    int fft_len;
 
-    Data64 *d_buf_AB = nullptr; // [2*n_batch*padded] = transformed domain (temp) of A,B
+    Data64 *d_buf_AB = nullptr;
     Data64 *d_buf_A = nullptr;
     Data64 *d_buf_B = nullptr;
 #if CARRY_NORM_ALG == CARRY_ALG_MULTI_TILE
     Data64 *d_tile_carry = nullptr;
-    int    *d_first_tile = nullptr; // [n_batch] first tile with non-zero residual (n_tiles = none)
+    int    *d_first_tile = nullptr;
 #endif
-    double *d_real = nullptr;   // [2*n_batch*fft_len] reals (FFNT I/O)
+    double *d_real = nullptr;
 
     Complex64 *d_root_fwd = nullptr;
     Complex64 *d_root_inv = nullptr;
@@ -64,9 +62,6 @@ struct FftFFNTBatch
     explicit FftFFNTBatch(int n_limbs_, int n_batch_);
     ~FftFFNTBatch();
 
-    // Buffer holding the raw (un-normalized) coefficients the carry layer reads.
-    // For FFNT this is the real output of the inverse transform (d_real, A-slot),
-    // per-candidate stride = fft_len = padded — NOT the complex temp d_buf_A.
     LimbT *raw_coeffs() { return reinterpret_cast<LimbT *>(d_real); }
 
     void ntt_A(const LimbT *d_src, int n_src, cudaStream_t s = 0);

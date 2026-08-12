@@ -1,33 +1,27 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/ops/limb_storage.cuh
+ * ROLE   the limb storage type and its load/store boundary
+ *
+ * HOW    Every limb-touching kernel is templated on LimbT so it reads and
+ *        writes the backend natural representation: double for the FFT
+ *        backends, and for the NTT backends uint32 under MR_LIMB32,
+ *        otherwise Data64. RawT stays 64-bit — raw INTT coefficients reach
+ *        ~2^58 and are never narrowed. Only the carry layer crosses from
+ *        RawT to LimbT.
+ *
+ * NOTE   All limb arithmetic happens in uint64 registers; the width only
+ *        shows at the memory boundary. That is what makes the narrow
+ *        storage safe: a normalized limb is below 2^LIMB_BITS by
+ *        construction.
+ *
+ * CHANGELOG
+ *   2026-08-11  Added the uint32 branch (MR_LIMB32) and split RawT out of
+ *               LimbT. Measured -3.4% time and -47% peak VRAM at 100k
+ *               digits.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
-// ops/limb_storage.cuh — Limb storage abstraction for the modular pipeline.
-//
-// PROBLEM: the FFT-based multiplication backends (cuFFT / GPU-FFT / FFNT) compute
-// in `double`, while the NTT backends compute in integers (`Data64`). Historically
-// the modular layer (carry, sub, shift, reductions, runner) was written against
-// `Data64`, forcing an int→double cast on every forward transform and a double→int
-// cast on every inverse. Those casts are full extra memory passes per operation.
-//
-// SOLUTION: parametrize every limb-touching kernel on the *limb storage type*
-// `LimbT`. For FFT backends LimbT == double, so the transform reads/writes its
-// natural representation and the casts disappear; for NTT backends LimbT == Data64
-// and the code is byte-identical to before.
-//
-// Numerical safety: all limb arithmetic is performed in `uint64_t` internally
-// (mask / shift / borrow). Only the load/store at the kernel boundary crosses the
-// double↔int line, and that is exact because:
-//   • normalized limbs are < 2^LIMB_BITS  (≤ 2^16, exact in double),
-//   • raw convolution coefficients are < 2^52 (guarded by each FFT ctor),
-//   • double has a 52-bit mantissa → integers < 2^53 are represented exactly.
-//
-// limb_ld(double) replicates round_scatter's semantics (round to nearest, clamp
-// negatives to 0) so a raw INTT coefficient read directly as double matches the
-// value the old `round_scatter` kernel would have produced.
 
-// NOTE: this header must be included AFTER the selected multiplication backend,
-// so that `Data64` is already defined by the backend / GPU-NTT lib (it is
-// `unsigned long` there — do NOT redefine it here).
-
-#include "config.h"        // MUL_ALG identifiers (via constants.h)
+#include "config.h"
 #include <cstdint>
 #include <vector>
 #include <cuda_runtime.h>
@@ -39,18 +33,38 @@
 #if MUL_ALG == MUL_FFT_CUFFT || MUL_ALG == MUL_FFT_GPUFFT || MUL_ALG == MUL_FFNT_GPUFFT
 using LimbT = double;
 #define LIMB_IS_REAL 1
+#elif defined(MR_LIMB32)
+// A normalized limb is < 2^LIMB_BITS <= 2^32, so storing it in 64 bits wastes
+// half of every byte moved by the limb-side kernels (carry output, subtract,
+// shift, copy) — and those run at 86-92% of peak DRAM bandwidth, i.e. they are
+// bandwidth-bound and nothing but moving fewer bytes can speed them up.
+// RawT stays 64-bit: the *spectral* and raw-INTT coefficients reach ~2^58.
+using LimbT = uint32_t;
+#define LIMB_IS_REAL 0
 #else
 using LimbT = Data64;
 #define LIMB_IS_REAL 0
 #endif
 
+// Storage type of the raw (un-normalized) convolution coefficients produced by
+// the inverse transform: the transform's own word type, which reaches ~2^58 and
+// so is never narrowed. Only the carry layer crosses from RawT to LimbT.
+#if LIMB_IS_REAL
+using RawT = double;
+#else
+using RawT = Data64;
+#endif
+
 // ── Load/store helpers (overloaded; templated kernels resolve the right one) ────
 
 __host__ __device__ inline uint64_t limb_ld(Data64 x) { return (uint64_t)x; }
+#ifdef MR_LIMB32
+__host__ __device__ inline uint64_t limb_ld(uint32_t x) { return (uint64_t)x; }
+__host__ __device__ inline void limb_st(uint32_t &dst, uint64_t v) { dst = (uint32_t)v; }
+#endif
 
 __host__ __device__ inline uint64_t limb_ld(double x)
 {
-    // Match round_scatter: round to nearest, clamp negatives to 0.
 #ifdef __CUDA_ARCH__
     long long v = llround(x);
 #else
@@ -62,13 +76,21 @@ __host__ __device__ inline uint64_t limb_ld(double x)
 __host__ __device__ inline void limb_st(Data64 &dst, uint64_t v) { dst = (Data64)v; }
 __host__ __device__ inline void limb_st(double &dst, uint64_t v) { dst = (double)v; }
 
-// ── Host ↔ device limb transfer (converts uint64↔LimbT when LIMB_IS_REAL) ───────
+// ── Host ↔ device limb transfer ────────────────────────────────────────────────
+// The host always speaks uint64 limbs. Whenever LimbT is a different width or
+// representation (double for the FFT backends, uint32 under MR_LIMB32) the
+// transfer has to convert element-wise; otherwise it is a plain cudaMemcpy.
 // Returns the cudaError so callers can wrap with their CU() macro. `count` is the
-// number of limbs (NOT bytes). When LimbT == Data64 these are plain cudaMemcpy.
+// number of limbs (NOT bytes).
+#if LIMB_IS_REAL || defined(MR_LIMB32)
+#define LIMB_NEEDS_CONVERT 1
+#else
+#define LIMB_NEEDS_CONVERT 0
+#endif
 
 inline cudaError_t limb_upload(LimbT *d_dst, const uint64_t *h_src, size_t count)
 {
-#if LIMB_IS_REAL
+#if LIMB_NEEDS_CONVERT
     std::vector<LimbT> tmp(count);
     for (size_t i = 0; i < count; i++)
         tmp[i] = (LimbT)h_src[i];
@@ -80,7 +102,7 @@ inline cudaError_t limb_upload(LimbT *d_dst, const uint64_t *h_src, size_t count
 
 inline cudaError_t limb_download(uint64_t *h_dst, const LimbT *d_src, size_t count)
 {
-#if LIMB_IS_REAL
+#if LIMB_NEEDS_CONVERT
     std::vector<LimbT> tmp(count);
     cudaError_t e = cudaMemcpy(tmp.data(), d_src, count * sizeof(LimbT), cudaMemcpyDeviceToHost);
     for (size_t i = 0; i < count; i++)

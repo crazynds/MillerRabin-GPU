@@ -70,8 +70,8 @@ elseif(MUL_ALG STREQUAL "MUL_FFNT_GPUFFT")
 else()
     set(MUL_BACKEND_SRC
         ${SRC_DIR}/ops/mul/ntt_merge.cu
-        ${SRC_DIR}/lib/gpuntt/ntt_merge_intt_fused.cu
-        ${SRC_DIR}/lib/gpuntt/ntt_merge_ntt_fused.cu)
+        ${SRC_DIR}/ntt/ntt_merge_intt_fused.cu
+        ${SRC_DIR}/ntt/ntt_merge_ntt_fused.cu)
 endif()
 message(STATUS "MUL_ALG = ${MUL_ALG} → ${MUL_BACKEND_SRC}")
 
@@ -95,6 +95,51 @@ if(MR_NTT_FUSED_PAD)
     set(MR_NTT_FUSED_PAD 1)
 else()
     unset(MR_NTT_FUSED_PAD)
+endif()
+# 32-bit limb storage. Requires an integer backend (the FFT ones store limbs as
+# double) and LIMB_BITS <= 32. Montgomery additionally needs a carry algorithm
+# that folds the addend into its load — its REDC adds raw INTT coefficients
+# (~2^58) to T, which must never be parked in a 32-bit limb slot.
+if(MR_LIMB32
+   AND (MUL_ALG STREQUAL "MUL_MERGE_GPUNTT" OR MUL_ALG STREQUAL "MUL_4STEP_GPUNTT"
+        OR MUL_ALG STREQUAL "MUL_SCHOOLBOOK")
+   AND LIMB_BITS LESS_EQUAL 32
+   AND (MOD_REDUCTION_ALG STREQUAL "MOD_RED_BARRETT"
+        OR NOT CARRY_NORM_ALG STREQUAL "CARRY_ALG_PREFIX_SCAN"))
+    set(MR_LIMB32 1)
+else()
+    unset(MR_LIMB32)
+endif()
+# Shoup (precomputed-quotient) butterflies. Only the locally-vendored fused NTT/INTT
+# kernels carry them, so it needs the merge backend; the NTT prime must be < 2^63.
+if(MR_NTT_SHOUP AND MUL_ALG STREQUAL "MUL_MERGE_GPUNTT")
+    set(MR_NTT_SHOUP 1)
+else()
+    unset(MR_NTT_SHOUP)
+endif()
+# Harvey lazy reduction: coefficients ride between butterflies in [0,2p)/[0,4p)
+# instead of [0,p), so each butterfly needs one conditional subtract instead of
+# three. Rides on the Shoup butterflies and needs 4p to fit in 64 bits.
+if(MR_NTT_LAZY AND MR_NTT_SHOUP AND MUL_ALG STREQUAL "MUL_MERGE_GPUNTT")
+    set(MR_NTT_LAZY 1)
+else()
+    unset(MR_NTT_LAZY)
+endif()
+# Compute q*p by shift/add using the merge prime's sparse bit pattern, moving the
+# work off the multiply pipe. Needs the Shoup butterflies and that exact prime,
+# which shoup_table_build verifies at setup.
+if(MR_NTT_SPARSE_P AND MR_NTT_SHOUP AND MUL_ALG STREQUAL "MUL_MERGE_GPUNTT")
+    set(MR_NTT_SPARSE_P 1)
+else()
+    unset(MR_NTT_SPARSE_P)
+endif()
+# The fused shift gather rides on the same fused forward-NTT kernel as the pad,
+# and Barrett is the only reduction that shifts before transforming.
+if(MR_NTT_FUSED_SHIFT AND MR_NTT_FUSED_PAD AND MUL_ALG STREQUAL "MUL_MERGE_GPUNTT"
+   AND MOD_REDUCTION_ALG STREQUAL "MOD_RED_BARRETT")
+    set(MR_NTT_FUSED_SHIFT 1)
+else()
+    unset(MR_NTT_FUSED_SHIFT)
 endif()
 configure_file(
     ${SRC_DIR}/config.h.in
@@ -136,12 +181,25 @@ endif()
 
 # ── Main binary: bench_mr_gpu ─────────────────────────────────────────────────
 add_executable(bench_mr_gpu
-    ${SRC_DIR}/bench_mr_gpu.cu
-    ${SRC_DIR}/helpers/bench_ops.cu
-    ${SRC_DIR}/miller_rabin_runner.cu
-    ${SRC_DIR}/input_parser.cu
-    ${SRC_DIR}/cpu_runner.cu
-    ${SRC_DIR}/mr_internals.cu
+    ${SRC_DIR}/main.cu
+    ${SRC_DIR}/cli/args.cu
+    ${SRC_DIR}/cli/usage.cu
+    ${SRC_DIR}/cli/config_print.cu
+    ${SRC_DIR}/driver/round_driver.cu
+    ${SRC_DIR}/bench/bench_ops.cu
+    ${SRC_DIR}/bench/bench_ops_gmp.cu
+    ${SRC_DIR}/bench/bench_ops_gpu.cu
+    ${SRC_DIR}/mr/miller_rabin_runner.cu
+    ${SRC_DIR}/driver/input_parser.cu
+    ${SRC_DIR}/driver/cpu_runner.cu
+    ${SRC_DIR}/mr/mr_kernels.cu
+    ${SRC_DIR}/mr/witness_buffers.cu
+    ${SRC_DIR}/mr/window_exp_loop.cu
+    ${SRC_DIR}/perf/perf_report.cu
+    ${SRC_DIR}/tests/test_modular_ops.cu
+    ${SRC_DIR}/tests/test_known_primes.cu
+    ${SRC_DIR}/tests/test_general_s.cu
+    ${SRC_DIR}/tests/test_s1_nextprime.cu
     ${SRC_DIR}/bench/bench_prime_finder.cu
     ${SRC_DIR}/bench/cpu_witness.cu
     ${SRC_DIR}/bench/throughput_bench.cu
@@ -151,10 +209,10 @@ add_executable(bench_mr_gpu
     ${SRC_DIR}/ops/carry/carry_norm.cu
     ${SRC_DIR}/ops/shift/shift.cu
     ${SRC_DIR}/ops/sub/sub.cu
-    ${SRC_DIR}/batch_mod_ctx.cu
-    ${SRC_DIR}/helpers/mod_perf.cu
-    ${SRC_DIR}/reductions/montgomery.cu
-    ${SRC_DIR}/reductions/barrett.cu
+    ${SRC_DIR}/mod/batch_mod_ctx.cu
+    ${SRC_DIR}/perf/mod_perf.cu
+    ${SRC_DIR}/mod/reductions/montgomery.cu
+    ${SRC_DIR}/mod/reductions/barrett.cu
 )
 
 target_include_directories(bench_mr_gpu PRIVATE

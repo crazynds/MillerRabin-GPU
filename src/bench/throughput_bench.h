@@ -1,21 +1,20 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FILE   src/bench/throughput_bench.h
+ * ROLE   throughput phase: witness checks per second
+ *
+ * HOW    Tests the same candidate with one witness, back to back, for
+ *        timeout_sec seconds.
+ *
+ * NOTE   One witness rather than the full sweep keeps the work per call
+ *        fixed regardless of whether the candidate is prime — a composite
+ *        would be compacted away after witness 1 and silently deflate the
+ *        count.
+ * ───────────────────────────────────────────────────────────────────────────── */
 #pragma once
-// throughput_bench.h — "how many single-witness Miller-Rabin checks per
-// second" phase.
-//
-// The same candidate (see bench_prime_finder.h — small-factor-free, not
-// necessarily prime) is tested with one witness, back-to-back, for
-// `timeout_sec` seconds. Using a single witness (rather than the full
-// DEFAULT_WITNESSES sweep) keeps the amount of work per call fixed and
-// comparable regardless of whether the candidate happens to be prime: a
-// composite candidate would otherwise get compacted away after witness 1
-// and silently deflate the count.
-//
-// GPU and CPU sides are independent entry points; nothing here decides which
-// to run or how to present the result — that's compare_bench's job.
 
 #include <gmp.h>
 #include "config.h"
-#include "bench_common.h"
+#include "bench/bench_common.h"
 
 // Runs one GPU witness check (gpu_test_witness) on batches of `n_items`
 // copies of N (MR_BATCH_SIZE by default), back-to-back, until `timeout_sec`

@@ -93,12 +93,38 @@ Each line is one equation, with an optional **group ID** prefix:
 
 | Option | Description |
 |--------|-------------|
-| `--test` | Run GMP correctness checks before benchmarking |
-| `--progress` | Show live GPU progress bar |
-| `--report` | Per-candidate detail report |
-| `--config` | Print active build configuration and exit |
-| `--bench-ops` | Benchmark individual GPU primitives |
-| `--bench-ops-long` | Longer primitive benchmark |
+| `--test` | Run GMP-checked correctness tests before the benchmark |
+| `--report` | Print a per-candidate detail report |
+| `--progress` | Show a live GPU progress bar |
+| `--config` | Print the active build configuration and exit |
+| `--bench-ops` | Benchmark the individual GPU primitives |
+| `--bench-ops-long` | Longer/more thorough primitive benchmark |
+| `--help`, `-h` | Show the full help and exit |
+
+### Running on the CPU instead
+
+Same group semantics, using GMP `mpz_probab_prime_p`:
+
+| Option | Description |
+|--------|-------------|
+| `--cpu` | One candidate at a time, no batching |
+| `--cpu-parallel` | Spread across all hardware threads |
+| `--threads N`, `-j N` | Spread across N threads |
+
+### `--bench-compare`
+
+Self-benchmark of GPU against CPU on a freshly generated, small-factor-free
+candidate. Ignores `<input.txt>`. Without `--do`, the GPU runs once and the CPU
+is swept across every thread count from 1 to the machine's hardware concurrency.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--digits N` | 100000 | Decimal digits of the test candidate |
+| `--timeout S` | 30 | Seconds per run for the throughput phase |
+| `--single-iters K` | 10 | Latency-phase repetitions per side |
+| `--skip-phase-1` | | Skip the throughput phase |
+| `--skip-phase-2` | | Skip the single-candidate latency phase |
+| `--do=WHO` | | Restrict to one side and print each phase as it finishes: `--do=gpu`, or `--do=Ncpu` for CPU with exactly N threads (`--do=1cpu`, `--do=8cpu`). Useful for firing one job per side. |
 
 ## Project layout
 
@@ -109,14 +135,16 @@ Each line is one equation, with an optional **group ID** prefix:
 ├── example.txt               # Sample candidates in equation format
 ├── docs/                     # Extended documentation
 └── src/
-    ├── bench_mr_gpu.cu       # Entry point & driver
-    ├── equation.h            # Arithmetic parser  →  mpz_t (GMP)
-    ├── candidate.cuh         # NumberCandidate / GroupCandidate
-    ├── miller_rabin_runner.* # GPU exponentiation pipeline
-    ├── batch_mod_ctx.*       # Batched modular context (GPU buffers & tables)
-    ├── reductions/           # Montgomery & Barrett reduction kernels
-    ├── ops/                  # mul / carry / shift / sub GPU kernels
-    └── helpers/ perf/        # Timers, micro-benchmarks, profiling tree
+    ├── main.cu               # Entry point
+    ├── cli/                  # Argument parsing, --help, --config
+    ├── driver/               # Equation parser, candidates, round driver, CPU path
+    ├── mr/                   # Miller-Rabin GPU exponentiation pipeline
+    ├── mod/                  # Batched modular context + reductions/ (Montgomery, Barrett)
+    ├── ntt/                  # Vendored/fused NTT & INTT kernels, Shoup butterflies
+    ├── ops/                  # mul/ carry/ shift/ sub GPU kernels
+    ├── tests/                # GMP-checked correctness tests (--test)
+    ├── bench/                # --bench-ops, --bench-compare
+    └── perf/ util/           # Profiling tree, timers, helpers
 ```
 
 ## Documentation
