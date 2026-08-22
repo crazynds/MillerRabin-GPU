@@ -12,7 +12,7 @@
 struct CompareBenchOptions {
     int digits = 100000;
     int throughput_timeout_s = 30;
-    int single_iters = 10;
+    int single_iters = 3;
     int gpu_items = 0;
     bool gpu_only = false;
     bool cpu_only = false;

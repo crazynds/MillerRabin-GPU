@@ -9,7 +9,7 @@
 #include "config.h"
 #include "ops/mul/ntt_4step.cuh"
 #include "ops/mul/ntt_check.cuh"
-#include "gpuntt/ntt_4step/ntt_4step_cpu.cuh"
+#include "gpuntt/ntt_4step/ntt_4step.cuh"
 #include <stdexcept>
 #include <string>
 #include "util/cuda_check.cuh"

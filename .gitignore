@@ -12,3 +12,4 @@ src/config.h
 *.obj
 .DS_Store
 prof/
+data/
