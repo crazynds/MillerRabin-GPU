@@ -229,7 +229,10 @@ target_link_libraries(bench_mr_gpu PRIVATE
     m
 )
 if(MR_USE_GPUFFT)
-    target_link_libraries(bench_mr_gpu PRIVATE GPUFFT::fft)
+    # GPUFFT::fft needs libm (exp, etc.); re-link m after it since static
+    # libraries only pull symbols from libraries that appear later on the
+    # link line, and m was already placed earlier above.
+    target_link_libraries(bench_mr_gpu PRIVATE GPUFFT::fft m)
 endif()
 
 # Forward GPU-NTT flags from params.cmake to the compiler
