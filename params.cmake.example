@@ -27,7 +27,7 @@ set(MR_LIMB32 ON)
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Candidates per GPU launch. Higher = better utilization, higher peak VRAM.
-set(MR_BATCH_SIZE 256)
+set(MR_BATCH_SIZE 64)
 
 # Sliding-window width for base^exp mod N; the power table holds 2^N entries. Range 4-10.
 set(MR_WINDOW_BITS 8)

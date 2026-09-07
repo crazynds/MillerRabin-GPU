@@ -13,3 +13,6 @@ src/config.h
 .DS_Store
 prof/
 data/
+
+# Second paper (Barrett-vs-Montgomery carry-propagation study), self-contained WIP
+paper2-barrett-carry/
